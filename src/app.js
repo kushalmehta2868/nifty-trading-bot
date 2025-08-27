@@ -1,5 +1,6 @@
 const cron = require('node-cron');
 const express = require('express');
+const app = express();
 const tradingStrategy = require('./services/strategy');
 const telegramBot = require('./services/telegramBot');
 const logger = require('./utils/logger');
@@ -176,6 +177,23 @@ class TradingBot {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 }
+
+// Ping endpoint
+app.get('/ping', (req, res) => {
+  res.json({
+    status: 'alive',
+    timestamp: new Date(),
+    uptime: process.uptime()
+  });
+});
+
+// Self-ping every 10 minutes (prevent sleep)
+setInterval(() => {
+  if (process.env.NODE_ENV === 'production') {
+    fetch(`${process.env.RENDER_URL}/ping`)
+      .catch(err => console.log('Ping failed:', err.message));
+  }
+}, 10 * 60 * 1000);
 
 // Start the bot
 const bot = new TradingBot();
