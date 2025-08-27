@@ -68,8 +68,8 @@ class TradingBot {
   }
 
   scheduleMarketScanning() {
-    // Run every 2 seconds during trading hours (Monday to Friday, 9:15 AM to 3:30 PM IST)
-    cron.schedule('*/2 * * * * *', async () => {
+    // Run every 5 seconds during trading hours (Monday to Friday, 9:15 AM to 3:30 PM IST)
+    cron.schedule('*/5 * * * * *', async () => {
       if (!this.isValidTradingTime() || this.dailyStats.sentSignals >= config.trading.maxTradesPerDay) {
         return;
       }
@@ -190,7 +190,7 @@ app.get('/ping', (req, res) => {
 // Self-ping every 10 minutes (prevent sleep)
 setInterval(() => {
   if (process.env.NODE_ENV === 'production') {
-    fetch(`${process.env.RENDER_URL}/ping`)
+    fetch(`https://nifty-trading-bot-wnxb.onrender.com/ping`)
       .catch(err => console.log('Ping failed:', err.message));
   }
 }, 10 * 60 * 1000);
