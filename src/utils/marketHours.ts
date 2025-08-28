@@ -23,8 +23,8 @@ const MARKET_HOLIDAYS_2024 = [
 ];
 
 export function isMarketOpen(date: Date = new Date()): boolean {
-  // Convert to IST
-  const istDate = new Date(date.toLocaleString("en-US", { timeZone: INDIAN_MARKET_HOURS.timezone }));
+  // Always work with IST regardless of server timezone
+  const istDate = getISTDate(date);
   
   // Check if it's weekend (Saturday = 6, Sunday = 0)
   const dayOfWeek = istDate.getDay();
@@ -49,8 +49,16 @@ export function isMarketOpen(date: Date = new Date()): boolean {
   return currentTimeInMinutes >= marketOpenInMinutes && currentTimeInMinutes <= marketCloseInMinutes;
 }
 
+function getISTDate(date: Date = new Date()): Date {
+  // Create a new date object in IST timezone
+  // This works regardless of server timezone
+  const utcDate = new Date(date.toISOString());
+  const istOffset = 5.5 * 60 * 60 * 1000; // IST is UTC+5:30
+  return new Date(utcDate.getTime() + istOffset);
+}
+
 export function getNextMarketOpen(date: Date = new Date()): Date {
-  const istDate = new Date(date.toLocaleString("en-US", { timeZone: INDIAN_MARKET_HOURS.timezone }));
+  const istDate = getISTDate(date);
   let nextOpen = new Date(istDate);
   
   // If current time is after market close or weekend, move to next trading day
@@ -81,7 +89,9 @@ export function getNextMarketOpen(date: Date = new Date()): Date {
   // Set to market opening time
   nextOpen.setHours(INDIAN_MARKET_HOURS.open.hour, INDIAN_MARKET_HOURS.open.minute, 0, 0);
   
-  return nextOpen;
+  // Convert back to UTC for proper time calculation
+  const utcOffset = 5.5 * 60 * 60 * 1000;
+  return new Date(nextOpen.getTime() - utcOffset);
 }
 
 export function getTimeUntilMarketOpen(date: Date = new Date()): number {
@@ -110,4 +120,22 @@ export function formatTimeUntilMarketOpen(date: Date = new Date()): string {
   }
   
   return `${hours}h ${minutes}m until market opens`;
+}
+
+// Debug function to verify timezone handling
+export function getTimezoneInfo(): {
+  serverTime: string;
+  serverTimezone: string;
+  istTime: string;
+  marketOpen: boolean;
+} {
+  const now = new Date();
+  const istDate = getISTDate(now);
+  
+  return {
+    serverTime: now.toISOString(),
+    serverTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    istTime: istDate.toISOString().replace('Z', '+05:30'),
+    marketOpen: isMarketOpen(now)
+  };
 }

@@ -1,6 +1,6 @@
 import express from 'express';
 import { logger } from '../utils/logger';
-import { isMarketOpen, formatTimeUntilMarketOpen } from '../utils/marketHours';
+import { isMarketOpen, formatTimeUntilMarketOpen, getTimezoneInfo } from '../utils/marketHours';
 
 class HealthServer {
   private app: express.Application;
@@ -26,10 +26,12 @@ class HealthServer {
     // Health check endpoint for Render
     this.app.get('/health', (req, res) => {
       const marketStatus = isMarketOpen();
+      const timezoneInfo = getTimezoneInfo();
       const response = {
         status: 'ok',
         timestamp: new Date().toISOString(),
         uptime: process.uptime(),
+        timezone: timezoneInfo,
         market: {
           isOpen: marketStatus,
           nextStatus: marketStatus ? 'Market is open' : formatTimeUntilMarketOpen()
