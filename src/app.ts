@@ -2,6 +2,7 @@ import { webSocketFeed } from './services/webSocketFeed';
 import { strategy } from './services/strategy';
 import { telegramBot } from './services/telegramBot';
 import { orderService } from './services/orderService';
+import { healthServer } from './services/healthServer';
 import { logger } from './utils/logger';
 import { config } from './config/config';
 import { isMarketOpen, getTimeUntilMarketOpen, formatTimeUntilMarketOpen } from './utils/marketHours';
@@ -22,6 +23,9 @@ class WebSocketTradingBot {
     try {
       logger.info('🚀 WebSocket Trading Bot Starting...');
       logger.info(`Data Source: ${config.trading.useMockData ? 'Mock' : 'Live'} WebSocket`);
+
+      // Start health server first (for Render keep-alive)
+      healthServer.start();
 
       // Check market hours
       if (!isMarketOpen()) {
@@ -146,6 +150,7 @@ class WebSocketTradingBot {
 
     // Disconnect services
     webSocketFeed.disconnect();
+    healthServer.stop();
 
     const uptime = Math.floor((Date.now() - this.startTime) / 1000);
     logger.info(`Bot ran for ${uptime} seconds`);

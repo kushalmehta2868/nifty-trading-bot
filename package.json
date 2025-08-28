@@ -15,6 +15,7 @@
     "dependencies": {
         "axios": "^1.5.0",
         "dotenv": "^16.3.1",
+        "express": "^4.18.2",
         "node-cron": "^3.0.2",
         "node-telegram-bot-api": "^0.61.0",
         "smartapi-javascript": "^1.0.27",
@@ -23,6 +24,7 @@
         "ws": "^8.14.0"
     },
     "devDependencies": {
+        "@types/express": "^4.17.17",
         "@types/node": "^24.3.0",
         "@types/node-telegram-bot-api": "^0.64.10",
         "@types/speakeasy": "^2.0.10",
