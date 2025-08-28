@@ -22,21 +22,15 @@ class WebSocketFeed {
     NIFTY: { prices: [], currentPrice: 0, lastUpdate: 0 },
     BANKNIFTY: { prices: [], currentPrice: 0, lastUpdate: 0 }
   };
-  private mockInterval: NodeJS.Timeout | null = null;
 
   public async initialize(): Promise<boolean> {
     try {
-      if (config.trading.useMockData) {
-        logger.info('Using mock data, starting mock WebSocket feed');
-        this.startMockFeed();
-        return true;
-      }
+      logger.info('Initializing real-time Angel One WebSocket feed');
 
       const authResult = await angelAPI.authenticate();
       if (!authResult) {
-        logger.warn('Angel authentication failed, using mock feed');
-        this.startMockFeed();
-        return false;
+        logger.error('Angel authentication failed - cannot proceed without real data');
+        throw new Error('Authentication required for real trading data');
       }
 
       await this.connect();
@@ -44,8 +38,8 @@ class WebSocketFeed {
 
     } catch (error) {
       logger.error('WebSocket initialization failed:', (error as Error).message);
-      this.startMockFeed();
-      return false;
+      logger.error('CRITICAL: Cannot operate without real market data');
+      throw error;
     }
   }
 
@@ -84,16 +78,15 @@ class WebSocketFeed {
         logger.error('WebSocket error:', error.message);
         this.isConnected = false;
         
-        // If connection fails, fall back to mock data
         if (error.message.includes('401') || error.message.includes('403')) {
-          logger.error('Authentication failed for WebSocket. Switching to mock data.');
-          this.startMockFeed();
+          logger.error('CRITICAL: Authentication failed for WebSocket - cannot proceed without real data');
+          throw new Error('WebSocket authentication failed');
         }
       });
 
     } catch (error) {
       logger.error('WebSocket connection failed:', (error as Error).message);
-      this.startMockFeed();
+      throw error;
     }
   }
 
@@ -162,38 +155,6 @@ class WebSocketFeed {
     });
   }
 
-  private startMockFeed(): void {
-    if (this.mockInterval) {
-      clearInterval(this.mockInterval);
-    }
-
-    let niftyPrice = config.indices.NIFTY.basePrice;
-    let bankNiftyPrice = config.indices.BANKNIFTY.basePrice;
-    let trend = 1;
-
-    this.mockInterval = setInterval(() => {
-      // Simulate realistic market movements
-      const volatility = 0.3 + Math.random() * 0.4;
-
-      const niftyMove = (Math.random() - 0.5) * 2 * trend * volatility * 15;
-      const bankNiftyMove = niftyMove * 2.2; // Higher volatility
-
-      niftyPrice = Math.max(23000, Math.min(26000, niftyPrice + niftyMove));
-      bankNiftyPrice = Math.max(52000, Math.min(58000, bankNiftyPrice + bankNiftyMove));
-
-      // Random trend changes
-      if (Math.random() < 0.02) {
-        trend *= -1;
-      }
-
-      this.updatePrice('NIFTY', niftyPrice);
-      this.updatePrice('BANKNIFTY', bankNiftyPrice);
-
-    }, 1000); // Update every second
-
-    logger.info('🎭 Mock WebSocket feed started');
-    this.isConnected = true;
-  }
 
   public addSubscriber(callback: PriceSubscriber): void {
     this.subscribers.push(callback);
@@ -219,9 +180,8 @@ class WebSocketFeed {
 
   private scheduleReconnect(): void {
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      logger.error('Max reconnection attempts reached, switching to mock feed');
-      this.startMockFeed();
-      return;
+      logger.error('CRITICAL: Max reconnection attempts reached - cannot proceed without real market data');
+      throw new Error('WebSocket connection permanently failed');
     }
 
     const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
@@ -229,7 +189,9 @@ class WebSocketFeed {
 
     setTimeout(() => {
       logger.info(`🔄 Reconnecting WebSocket (attempt ${this.reconnectAttempts})...`);
-      this.connect();
+      this.connect().catch(error => {
+        logger.error('Reconnection failed:', error.message);
+      });
     }, delay);
   }
 
@@ -239,10 +201,6 @@ class WebSocketFeed {
       this.ws = null;
     }
     
-    if (this.mockInterval) {
-      clearInterval(this.mockInterval);
-      this.mockInterval = null;
-    }
     
     this.isConnected = false;
   }

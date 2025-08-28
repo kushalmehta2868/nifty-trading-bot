@@ -26,7 +26,22 @@ class TelegramBotService {
       this.signalsToday++;
     });
 
-    logger.info('📱 Telegram bot initialized');
+    // Listen for order fills (entry executed)
+    (process as any).on('orderFilled', async (data: { order: any, message: string }) => {
+      await this.sendMessage(data.message);
+    });
+
+    // Listen for order exits (target/SL hit)
+    (process as any).on('orderExited', async (data: { order: any, message: string }) => {
+      await this.sendMessage(data.message);
+    });
+
+    // Listen for balance insufficient alerts
+    (process as any).on('balanceInsufficient', async (data: { signal: any, message: string }) => {
+      await this.sendMessage(data.message);
+    });
+
+    logger.info('📱 Telegram bot initialized with order monitoring and balance alerts');
   }
 
   public async sendMessage(message: string, options?: any): Promise<void> {
@@ -67,17 +82,16 @@ class TelegramBotService {
   private formatTradingSignal(signal: TradingSignal): string {
     const directionEmoji = signal.direction === 'UP' ? '🚀' : '🔻';
     const typeEmoji = signal.optionType === 'CE' ? '📈' : '📉';
-    const sourceEmoji = signal.timestamp ? '⚡' : '🎭';
 
     return `
-${directionEmoji} *New Setup: ${signal.direction === 'UP' ? 'BUY' : 'SELL'}*
+${directionEmoji} *BRACKET ORDER PLACED*
 ${typeEmoji} *${signal.optionSymbol}*
-*Trigger:* Above ₹${signal.entryPrice}
 
-🎯 *POSITION ENTERED:*
-*${signal.optionSymbol}*
-*Entry:* ₹${signal.entryPrice}
-*Tgt:* ₹${signal.target}, *SL:* ₹${signal.stopLoss}
+🎯 *AUTOMATIC TRADING:*
+*Entry:* ₹${signal.entryPrice} (MARKET BUY)
+*Target:* ₹${signal.target} (Auto SELL)
+*Stop Loss:* ₹${signal.stopLoss} (Auto SELL)
+*Qty:* ${config.indices[signal.indexName].lotSize} lots
 
 📊 *Market Data:*
 *${signal.indexName}:* ${signal.spotPrice}
@@ -86,8 +100,9 @@ ${typeEmoji} *${signal.optionSymbol}*
 *Change:* ${signal.technicals.priceChange.toFixed(2)}%
 *Confidence:* ${signal.confidence.toFixed(0)}%
 
-${sourceEmoji} *Source:* ${config.trading.useMockData ? 'Mock' : 'Live'} WebSocket
+⚡ *Source:* Live Angel One WebSocket
 ⏰ *Time:* ${signal.timestamp.toLocaleTimeString()}
+🤖 *Auto Exit:* Angel One will execute SELL orders automatically at Target/SL
         `.trim();
   }
 
@@ -105,18 +120,19 @@ ${sourceEmoji} *Source:* ${config.trading.useMockData ? 'Mock' : 'Live'} WebSock
       const message = `
 🤖 *WebSocket Trading Bot Started*
 
-${config.trading.useMockData ? '🎭' : '⚡'} *Data Source:* ${config.trading.useMockData ? 'Mock' : 'Live'} WebSocket
+⚡ *Data Source:* Live Angel One WebSocket
 📡 *Streaming:* NIFTY & Bank NIFTY  
 🎯 *Strategy:* EMA${config.strategy.emaPeriod} + RSI${config.strategy.rsiPeriod} Breakouts
 ⚡ *Speed:* Real-time tick processing
 🎚️ *Confidence:* ${config.strategy.confidenceThreshold}%+ signals only
+💰 *Prices:* Real option premiums from Angel One
 
 *Configuration:*
 • Auto Trade: ${config.trading.autoTrade ? 'Enabled' : 'Disabled'}
 • Signal Cooldown: ${config.trading.signalCooldown / 60000} minutes
 • Breakout Threshold: ${config.strategy.breakoutThreshold}%
 
-*Ready to hunt for breakouts like Aug 26! 🎯*
+*Ready to hunt for real breakouts with live data! 🎯*
             `.trim();
 
       await this.sendMessage(message);

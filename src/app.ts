@@ -78,8 +78,14 @@ class WebSocketTradingBot {
 
     const timeUntilSummary = tomorrow.getTime() - now.getTime();
 
-    this.dailySummaryTimeout = setTimeout(() => {
-      telegramBot.sendDailySummary(this.stats);
+    this.dailySummaryTimeout = setTimeout(async () => {
+      // Send trading summary
+      await telegramBot.sendDailySummary(this.stats);
+      
+      // Send balance summary
+      const balanceSummary = await orderService.getDailyBalanceSummary();
+      await telegramBot.sendMessage(balanceSummary);
+      
       // Reset daily stats
       this.stats = { signals: 0, successful: 0, avgConfidence: 0 };
       orderService.resetDailyStats();
@@ -150,6 +156,7 @@ class WebSocketTradingBot {
 
     // Disconnect services
     webSocketFeed.disconnect();
+    orderService.stopMonitoring();
     healthServer.stop();
 
     const uptime = Math.floor((Date.now() - this.startTime) / 1000);

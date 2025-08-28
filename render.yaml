@@ -12,8 +12,6 @@ services:
         value: production
       - key: USE_WEBSOCKET
         value: true
-      - key: USE_MOCK_DATA
-        value: false
       - key: AUTO_TRADE
         value: false
       - key: MAX_POSITIONS

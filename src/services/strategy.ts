@@ -1,4 +1,5 @@
 import { webSocketFeed } from './webSocketFeed';
+import { angelAPI } from './angelAPI';
 import { config } from '../config/config';
 import { logger } from '../utils/logger';
 import { isMarketOpen } from '../utils/marketHours';
@@ -69,7 +70,9 @@ class TradingStrategy {
     const signal = this.analyzeSignal(indexName, priceUpdate.price, buffer);
 
     if (signal && signal.confidence >= config.strategy.confidenceThreshold) {
-      this.executeSignal(signal);
+      this.executeSignal(signal).catch(error => {
+        logger.error('Failed to execute signal:', error.message);
+      });
       this.lastSignalTime[indexName] = Date.now();
     }
   }
@@ -113,14 +116,15 @@ class TradingStrategy {
     if (direction && confidence >= config.strategy.confidenceThreshold) {
       const strike = this.calculateStrike(currentPrice, indexName);
       const optionType: OptionType = direction === 'UP' ? 'CE' : 'PE';
+      const optionSymbol = this.generateOptionSymbol(indexName, strike, optionType);
 
       return {
         indexName,
         direction,
         spotPrice: currentPrice,
         optionType,
-        optionSymbol: this.generateOptionSymbol(indexName, strike, optionType),
-        entryPrice: this.estimateOptionPrice(currentPrice, strike, optionType),
+        optionSymbol,
+        entryPrice: 0, // Will fetch real price in executeSignal
         target: 0, // Will calculate in executeSignal
         stopLoss: 0, // Will calculate in executeSignal
         confidence: Math.min(95, confidence),
@@ -136,15 +140,89 @@ class TradingStrategy {
     return null;
   }
 
-  private executeSignal(signal: TradingSignal): void {
-    // Calculate target and stop loss
-    signal.target = parseFloat((signal.entryPrice + 6 + Math.random() * 2).toFixed(2));
-    signal.stopLoss = parseFloat((signal.entryPrice - 5 + Math.random()).toFixed(2));
+  private async executeSignal(signal: TradingSignal): Promise<void> {
+    try {
+      // Fetch real option price from Angel One API
+      const realPrice = await this.getRealOptionPrice(signal);
+      
+      if (realPrice) {
+        signal.entryPrice = realPrice;
+        // Calculate realistic targets based on real price
+        signal.target = parseFloat((realPrice * 1.15).toFixed(2)); // 15% target
+        signal.stopLoss = parseFloat((realPrice * 0.85).toFixed(2)); // 15% stop loss
+        
+        logger.info(`✅ Real Option Price: ${signal.optionSymbol} = ₹${signal.entryPrice}`);
+      } else {
+        logger.error(`CRITICAL: Could not fetch real option price for ${signal.optionSymbol}`);
+        throw new Error('Real option price required - cannot proceed with estimated prices');
+      }
 
-    logger.info(`🚨 LIVE Signal: ${signal.indexName} ${signal.direction} - Confidence: ${signal.confidence.toFixed(0)}%`);
+      logger.info(`🚨 LIVE Signal: ${signal.indexName} ${signal.direction} - Confidence: ${signal.confidence.toFixed(0)}%`);
+      logger.info(`💰 Real Option Price: ${signal.optionSymbol} = ₹${signal.entryPrice}`);
 
-    // Emit signal for telegram bot
-    (process as any).emit('tradingSignal', signal);
+      // Emit signal for telegram bot
+      (process as any).emit('tradingSignal', signal);
+      
+    } catch (error) {
+      logger.error('Error in executeSignal:', (error as Error).message);
+    }
+  }
+
+  private async getRealOptionPrice(signal: TradingSignal): Promise<number | null> {
+    try {
+      logger.info(`Fetching real option price for ${signal.optionSymbol}`);
+
+      // Generate expiry string (format: 29AUG24)
+      const expiry = this.generateExpiryString();
+      const strike = this.calculateStrike(signal.spotPrice, signal.indexName);
+      
+      // Get option token first
+      const tokenResponse = await angelAPI.getOptionToken(
+        signal.indexName, 
+        strike, 
+        signal.optionType, 
+        expiry
+      );
+      
+      if (!tokenResponse) {
+        logger.error(`CRITICAL: Could not get token for ${signal.optionSymbol}`);
+        throw new Error('Option token lookup failed');
+      }
+
+      // Fetch real option price using token
+      const optionPrice = await angelAPI.getOptionPrice(signal.optionSymbol, tokenResponse);
+      
+      if (optionPrice && optionPrice > 0) {
+        logger.info(`✅ Real option price fetched: ${signal.optionSymbol} = ₹${optionPrice}`);
+        return optionPrice;
+      }
+
+      logger.error(`CRITICAL: Invalid option price received for ${signal.optionSymbol}`);
+      throw new Error('Invalid option price from API');
+      
+    } catch (error) {
+      logger.error(`CRITICAL: Failed to fetch real option price for ${signal.optionSymbol}:`, (error as Error).message);
+      throw error;
+    }
+  }
+
+  private generateExpiryString(): string {
+    // Weekly options expire on Tuesdays
+    const today = new Date();
+    const nextTuesday = new Date(today);
+    
+    // Find next Tuesday (Tuesday = 2)
+    const daysUntilTuesday = (2 - today.getDay() + 7) % 7;
+    // If today is Tuesday and market is still open, use next Tuesday
+    const adjustedDays = daysUntilTuesday === 0 ? 7 : daysUntilTuesday;
+    nextTuesday.setDate(today.getDate() + adjustedDays);
+
+    const day = nextTuesday.getDate().toString().padStart(2, '0');
+    const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+    const month = months[nextTuesday.getMonth()];
+    const year = nextTuesday.getFullYear().toString().slice(-2);
+
+    return `${day}${month}${year}`;
   }
 
   private calculateEMA(prices: number[], period: number): number {
@@ -185,29 +263,11 @@ class TradingStrategy {
     return Math.round(spotPrice / roundTo) * roundTo;
   }
 
-  private estimateOptionPrice(spotPrice: number, strike: number, optionType: OptionType): number {
-    const distance = Math.abs(spotPrice - strike);
-    const intrinsic = optionType === 'CE' ?
-      Math.max(0, spotPrice - strike) :
-      Math.max(0, strike - spotPrice);
-
-    const timeValue = Math.max(10, 70 - (distance / 15));
-    const volatilityPremium = 15 + Math.random() * 20;
-
-    return parseFloat((intrinsic + timeValue + volatilityPremium).toFixed(2));
-  }
 
   private generateOptionSymbol(indexName: IndexName, strike: number, optionType: OptionType): string {
-    const today = new Date();
-    const nextThursday = new Date(today);
-    nextThursday.setDate(today.getDate() + (4 - today.getDay() + 7) % 7);
-
-    const day = nextThursday.getDate().toString().padStart(2, '0');
-    const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-    const month = months[nextThursday.getMonth()];
-    const year = nextThursday.getFullYear().toString().slice(-2);
-
-    return `${indexName}${day}${month}${year}${strike}${optionType}`;
+    // Use the same expiry logic as generateExpiryString()
+    const expiryString = this.generateExpiryString();
+    return `${indexName}${expiryString}${strike}${optionType}`;
   }
 
   private isInCooldown(indexName: IndexName): boolean {

@@ -3,10 +3,10 @@ import * as speakeasy from 'speakeasy';
 import * as fs from 'fs';
 import { config } from '../config/config';
 import { logger } from '../utils/logger';
-import { 
-  AngelTokens, 
-  AngelLoginResponse, 
-  AngelProfileResponse 
+import {
+  AngelTokens,
+  AngelLoginResponse,
+  AngelProfileResponse
 } from '../types';
 
 class AngelAPI {
@@ -40,16 +40,12 @@ class AngelAPI {
   }
 
   public async authenticate(): Promise<boolean> {
-    if (config.trading.useMockData) {
-      logger.info('Using mock data, skipping Angel authentication');
-      return true;
-    }
+    logger.info('Authenticating with Angel One API - Real trading mode only');
 
     // Validate configuration before attempting authentication
     if (!this.validateConfig()) {
-      logger.error('Angel API configuration is incomplete');
-      config.trading.useMockData = true;
-      return false;
+      logger.error('CRITICAL: Angel API configuration is incomplete - cannot proceed without valid credentials');
+      throw new Error('Angel One API configuration required');
     }
 
     try {
@@ -62,21 +58,20 @@ class AngelAPI {
       return await this.freshLogin();
 
     } catch (error) {
-      logger.error('Angel authentication failed:', (error as Error).message);
-      
+      logger.error('CRITICAL: Angel authentication failed:', (error as Error).message);
+
       // Provide specific guidance based on error type
-      if ((error as Error).message.includes('Invalid Token') || 
-          (error as Error).message.includes('AG8001')) {
-        logger.error('This usually indicates:');
+      if ((error as Error).message.includes('Invalid Token') ||
+        (error as Error).message.includes('AG8001')) {
+        logger.error('Authentication failure - This usually indicates:');
         logger.error('1. Incorrect API credentials');
         logger.error('2. Invalid TOTP secret format');
         logger.error('3. API key not activated or expired');
         logger.error('Please verify your credentials with Angel Broking');
       }
-      
-      logger.warn('Falling back to mock data');
-      config.trading.useMockData = true;
-      return false;
+
+      logger.error('CRITICAL: Cannot proceed without valid Angel One authentication');
+      throw error;
     }
   }
 
@@ -85,7 +80,7 @@ class AngelAPI {
       'clientId', 'apiKey', 'apiSecret', 'password', 'totpSecret'
     ];
     const missing = required.filter(key => !config.angel[key]);
-    
+
     if (missing.length > 0) {
       logger.error(`Missing Angel API configuration: ${missing.join(', ')}`);
       return false;
@@ -184,9 +179,9 @@ class AngelAPI {
         logger.info(`JWT Token: ${this._jwtToken.substring(0, 20)}...`);
         return true;
       } else {
-        const errorMsg = response.data.message || 
-                        response.data.errorMessage || 
-                        'Authentication failed - no error message provided';
+        const errorMsg = response.data.message ||
+          response.data.errorMessage ||
+          'Authentication failed - no error message provided';
         logger.error('Angel API Response:', response.data);
         throw new Error(errorMsg);
       }
@@ -205,8 +200,8 @@ class AngelAPI {
   }
 
   public async makeRequest(
-    endpoint: string, 
-    method: 'GET' | 'POST' = 'GET', 
+    endpoint: string,
+    method: 'GET' | 'POST' = 'GET',
     data: any = null
   ): Promise<any> {
     if (!this.isAuthenticated) {
@@ -252,8 +247,8 @@ class AngelAPI {
   }
 
   public async getLTP(
-    exchange: string, 
-    tradingSymbol: string, 
+    exchange: string,
+    tradingSymbol: string,
     symbolToken: string
   ): Promise<any> {
     return this.makeRequest('/rest/secure/angelbroking/order/v1/getLTP', 'POST', {
@@ -261,6 +256,148 @@ class AngelAPI {
       tradingSymbol,
       symbolToken
     });
+  }
+
+  // Search for option contracts
+  public async searchScrips(
+    exchange: string,
+    searchtext: string
+  ): Promise<any> {
+    return this.makeRequest('/rest/secure/angelbroking/order/v1/searchScrip', 'POST', {
+      exchange,
+      searchtext
+    });
+  }
+
+  // Get option chain data
+  public async getOptionChain(
+    exchange: string,
+    symbolname: string,
+    strikeprice: string,
+    optiontype: string
+  ): Promise<any> {
+    return this.makeRequest('/rest/secure/angelbroking/order/v1/optionGreeks', 'POST', {
+      exchange,
+      symbolname,
+      strikeprice,
+      optiontype
+    });
+  }
+
+  // Get real-time option price using symbol token
+  public async getOptionPrice(
+    tradingSymbol: string,
+    symbolToken: string
+  ): Promise<number | null> {
+    try {
+      const response = await this.getLTP('NFO', tradingSymbol, symbolToken);
+
+      if (response && response.data && response.data.ltp) {
+        return parseFloat(response.data.ltp);
+      }
+
+      logger.warn(`Could not fetch option price for ${tradingSymbol}`);
+      return null;
+    } catch (error) {
+      logger.error(`Failed to get option price for ${tradingSymbol}:`, (error as Error).message);
+      return null;
+    }
+  }
+
+  // Get option symbol token (required for price fetching)
+  public async getOptionToken(
+    indexName: string,
+    strike: number,
+    optionType: 'CE' | 'PE' | undefined,
+    expiry: string
+  ): Promise<string | null> {
+    try {
+      const symbol = `${indexName}${expiry}${strike}${optionType}`;
+      const response = await this.searchScrips('NFO', symbol);
+
+      if (response && response.data && response.data.length > 0) {
+        return response.data[0].symboltoken;
+      }
+
+      logger.warn(`Could not find token for option: ${symbol}`);
+      return null;
+    } catch (error) {
+      logger.error(`Failed to get option token:`, (error as Error).message);
+      return null;
+    }
+  }
+
+  // Get order status and details
+  public async getOrderStatus(orderId: string): Promise<any> {
+    try {
+      const response = await this.makeRequest(
+        '/rest/secure/angelbroking/order/v1/details',
+        'POST',
+        { orderid: orderId }
+      );
+      return response;
+    } catch (error) {
+      logger.error(`Failed to get order status for ${orderId}:`, (error as Error).message);
+      throw error;
+    }
+  }
+
+  // Get order book (all orders)
+  public async getOrderBook(): Promise<any> {
+    try {
+      const response = await this.makeRequest(
+        '/rest/secure/angelbroking/order/v1/orderBook'
+      );
+      return response;
+    } catch (error) {
+      logger.error('Failed to get order book:', (error as Error).message);
+      throw error;
+    }
+  }
+
+  // Get trade book (executed orders)
+  public async getTradeBook(): Promise<any> {
+    try {
+      const response = await this.makeRequest(
+        '/rest/secure/angelbroking/order/v1/tradeBook'
+      );
+      return response;
+    } catch (error) {
+      logger.error('Failed to get trade book:', (error as Error).message);
+      throw error;
+    }
+  }
+
+  // Get account balance and available funds
+  public async getFunds(): Promise<any> {
+    try {
+      const response = await this.makeRequest(
+        '/rest/secure/angelbroking/user/v1/getRMS'
+      );
+      return response;
+    } catch (error) {
+      logger.error('Failed to get account funds:', (error as Error).message);
+      throw error;
+    }
+  }
+
+  // Get available margin for trading
+  public async getAvailableMargin(): Promise<number> {
+    try {
+      const fundsResponse = await this.getFunds();
+      
+      if (fundsResponse?.data?.availablecash) {
+        const availableMargin = parseFloat(fundsResponse.data.availablecash);
+        logger.info(`💰 Available trading margin: ₹${availableMargin.toFixed(2)}`);
+        return availableMargin;
+      }
+      
+      logger.warn('Could not retrieve available margin from funds response');
+      return 0;
+    } catch (error) {
+      logger.error('Failed to get available margin:', (error as Error).message);
+      return 0;
+    }
   }
 }
 
