@@ -19,9 +19,10 @@ exports.config = {
         chatId: process.env.TELEGRAM_CHAT_ID || ''
     },
     trading: {
-        useWebSocket: process.env.USE_WEBSOCKET === 'true',
-        useMockData: process.env.USE_MOCK_DATA === 'true',
+        useWebSocket: process.env.USE_WEBSOCKET !== 'false', // Default to true
+        useMockData: false, // Always use real data
         autoTrade: process.env.AUTO_TRADE === 'true',
+        paperTrading: process.env.PAPER_TRADING === 'true', // Paper trading mode - simulated orders
         maxPositions: parseInt(process.env.MAX_POSITIONS || '3'),
         signalCooldown: parseInt(process.env.SIGNAL_COOLDOWN || '300000')
     },

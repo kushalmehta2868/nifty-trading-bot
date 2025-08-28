@@ -5,6 +5,7 @@ declare class TelegramBotService {
     private signalsToday;
     constructor();
     initialize(): Promise<void>;
+    sendMessage(message: string, options?: any): Promise<void>;
     sendTradingSignal(signal: TradingSignal): Promise<void>;
     private formatTradingSignal;
     sendStartupMessage(): Promise<void>;

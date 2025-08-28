@@ -16,6 +16,7 @@ export interface TradingConfig {
   useWebSocket: boolean;
   useMockData: boolean;
   autoTrade: boolean;
+  paperTrading: boolean;
   maxPositions: number;
   signalCooldown: number;
 }

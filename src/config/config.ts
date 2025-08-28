@@ -19,6 +19,7 @@ export const config: Config = {
     useWebSocket: process.env.USE_WEBSOCKET !== 'false', // Default to true
     useMockData: false, // Always use real data
     autoTrade: process.env.AUTO_TRADE === 'true',
+    paperTrading: process.env.PAPER_TRADING === 'true', // Paper trading mode - simulated orders
     maxPositions: parseInt(process.env.MAX_POSITIONS || '3'),
     signalCooldown: parseInt(process.env.SIGNAL_COOLDOWN || '300000')
   },

@@ -26,6 +26,13 @@ class TelegramBotService {
       this.signalsToday++;
     });
 
+    // Listen for order placement confirmations
+    (process as any).on('orderPlaced', async (data: { signal: any, orderId: string, isPaperTrade?: boolean }) => {
+      const tradeType = data.isPaperTrade ? '📄 Paper' : '💰 Real';
+      const message = `✅ *ORDER PLACED* ${tradeType}\n📋 *Order ID:* ${data.orderId}\n📈 *Symbol:* ${data.signal.optionSymbol}\n⏰ *Time:* ${new Date().toLocaleTimeString()}`;
+      await this.sendMessage(message);
+    });
+
     // Listen for order fills (entry executed)
     (process as any).on('orderFilled', async (data: { order: any, message: string }) => {
       await this.sendMessage(data.message);
@@ -82,12 +89,17 @@ class TelegramBotService {
   private formatTradingSignal(signal: TradingSignal): string {
     const directionEmoji = signal.direction === 'UP' ? '🚀' : '🔻';
     const typeEmoji = signal.optionType === 'CE' ? '📈' : '📉';
+    const tradingMode = config.trading.paperTrading ? '📄 PAPER' : '💰 REAL';
+    const orderType = config.trading.paperTrading ? 'PAPER ORDER PLACED' : 'BRACKET ORDER PLACED';
+    const exitText = config.trading.paperTrading ? 
+      '📄 *Paper Exit:* Monitored by real market prices' : 
+      '🤖 *Auto Exit:* Angel One will execute SELL orders automatically at Target/SL';
 
     return `
-${directionEmoji} *BRACKET ORDER PLACED*
+${directionEmoji} *${orderType}* ${tradingMode}
 ${typeEmoji} *${signal.optionSymbol}*
 
-🎯 *AUTOMATIC TRADING:*
+🎯 *TRADING SETUP:*
 *Entry:* ₹${signal.entryPrice} (MARKET BUY)
 *Target:* ₹${signal.target} (Auto SELL)
 *Stop Loss:* ₹${signal.stopLoss} (Auto SELL)
@@ -102,7 +114,7 @@ ${typeEmoji} *${signal.optionSymbol}*
 
 ⚡ *Source:* Live Angel One WebSocket
 ⏰ *Time:* ${signal.timestamp.toLocaleTimeString()}
-🤖 *Auto Exit:* Angel One will execute SELL orders automatically at Target/SL
+${exitText}
         `.trim();
   }
 
@@ -129,10 +141,13 @@ ${typeEmoji} *${signal.optionSymbol}*
 
 *Configuration:*
 • Auto Trade: ${config.trading.autoTrade ? 'Enabled' : 'Disabled'}
+• Trading Mode: ${config.trading.paperTrading ? '📄 Paper Trading' : '💰 Real Trading'}
 • Signal Cooldown: ${config.trading.signalCooldown / 60000} minutes
 • Breakout Threshold: ${config.strategy.breakoutThreshold}%
 
-*Ready to hunt for real breakouts with live data! 🎯*
+${config.trading.paperTrading ? 
+  '*Ready for paper trading with real data! 📄*' : 
+  '*Ready to hunt for real breakouts with live data! 🎯*'}
             `.trim();
 
       await this.sendMessage(message);

@@ -28,7 +28,42 @@ class TelegramBotService {
             await this.sendTradingSignal(signal);
             this.signalsToday++;
         });
-        logger_1.logger.info('📱 Telegram bot initialized');
+        // Listen for order placement confirmations
+        process.on('orderPlaced', async (data) => {
+            const tradeType = data.isPaperTrade ? '📄 Paper' : '💰 Real';
+            const message = `✅ *ORDER PLACED* ${tradeType}\n📋 *Order ID:* ${data.orderId}\n📈 *Symbol:* ${data.signal.optionSymbol}\n⏰ *Time:* ${new Date().toLocaleTimeString()}`;
+            await this.sendMessage(message);
+        });
+        // Listen for order fills (entry executed)
+        process.on('orderFilled', async (data) => {
+            await this.sendMessage(data.message);
+        });
+        // Listen for order exits (target/SL hit)
+        process.on('orderExited', async (data) => {
+            await this.sendMessage(data.message);
+        });
+        // Listen for balance insufficient alerts
+        process.on('balanceInsufficient', async (data) => {
+            await this.sendMessage(data.message);
+        });
+        logger_1.logger.info('📱 Telegram bot initialized with order monitoring and balance alerts');
+    }
+    async sendMessage(message, options) {
+        if (!this.bot) {
+            logger_1.logger.warn('Telegram bot not configured, skipping message');
+            return;
+        }
+        try {
+            await this.bot.sendMessage(this.chatId, message, {
+                parse_mode: 'Markdown',
+                disable_web_page_preview: true,
+                ...options
+            });
+            logger_1.logger.info('📱 Message sent to Telegram');
+        }
+        catch (error) {
+            logger_1.logger.error('Failed to send Telegram message:', error.message);
+        }
     }
     async sendTradingSignal(signal) {
         if (!this.bot) {
@@ -37,10 +72,7 @@ class TelegramBotService {
         }
         try {
             const message = this.formatTradingSignal(signal);
-            await this.bot.sendMessage(this.chatId, message, {
-                parse_mode: 'Markdown',
-                disable_web_page_preview: true
-            });
+            await this.sendMessage(message);
             logger_1.logger.info('📱 Trading signal sent to Telegram');
         }
         catch (error) {
@@ -50,16 +82,20 @@ class TelegramBotService {
     formatTradingSignal(signal) {
         const directionEmoji = signal.direction === 'UP' ? '🚀' : '🔻';
         const typeEmoji = signal.optionType === 'CE' ? '📈' : '📉';
-        const sourceEmoji = signal.timestamp ? '⚡' : '🎭';
+        const tradingMode = config_1.config.trading.paperTrading ? '📄 PAPER' : '💰 REAL';
+        const orderType = config_1.config.trading.paperTrading ? 'PAPER ORDER PLACED' : 'BRACKET ORDER PLACED';
+        const exitText = config_1.config.trading.paperTrading ?
+            '📄 *Paper Exit:* Monitored by real market prices' :
+            '🤖 *Auto Exit:* Angel One will execute SELL orders automatically at Target/SL';
         return `
-${directionEmoji} *New Setup: ${signal.direction === 'UP' ? 'BUY' : 'SELL'}*
+${directionEmoji} *${orderType}* ${tradingMode}
 ${typeEmoji} *${signal.optionSymbol}*
-*Trigger:* Above ₹${signal.entryPrice}
 
-🎯 *POSITION ENTERED:*
-*${signal.optionSymbol}*
-*Entry:* ₹${signal.entryPrice}
-*Tgt:* ₹${signal.target}, *SL:* ₹${signal.stopLoss}
+🎯 *TRADING SETUP:*
+*Entry:* ₹${signal.entryPrice} (MARKET BUY)
+*Target:* ₹${signal.target} (Auto SELL)
+*Stop Loss:* ₹${signal.stopLoss} (Auto SELL)
+*Qty:* ${config_1.config.indices[signal.indexName].lotSize} lots
 
 📊 *Market Data:*
 *${signal.indexName}:* ${signal.spotPrice}
@@ -68,8 +104,9 @@ ${typeEmoji} *${signal.optionSymbol}*
 *Change:* ${signal.technicals.priceChange.toFixed(2)}%
 *Confidence:* ${signal.confidence.toFixed(0)}%
 
-${sourceEmoji} *Source:* ${config_1.config.trading.useMockData ? 'Mock' : 'Live'} WebSocket
+⚡ *Source:* Live Angel One WebSocket
 ⏰ *Time:* ${signal.timestamp.toLocaleTimeString()}
+${exitText}
         `.trim();
     }
     async sendStartupMessage() {
@@ -84,20 +121,24 @@ ${sourceEmoji} *Source:* ${config_1.config.trading.useMockData ? 'Mock' : 'Live'
             const message = `
 🤖 *WebSocket Trading Bot Started*
 
-${config_1.config.trading.useMockData ? '🎭' : '⚡'} *Data Source:* ${config_1.config.trading.useMockData ? 'Mock' : 'Live'} WebSocket
+⚡ *Data Source:* Live Angel One WebSocket
 📡 *Streaming:* NIFTY & Bank NIFTY  
 🎯 *Strategy:* EMA${config_1.config.strategy.emaPeriod} + RSI${config_1.config.strategy.rsiPeriod} Breakouts
 ⚡ *Speed:* Real-time tick processing
 🎚️ *Confidence:* ${config_1.config.strategy.confidenceThreshold}%+ signals only
+💰 *Prices:* Real option premiums from Angel One
 
 *Configuration:*
 • Auto Trade: ${config_1.config.trading.autoTrade ? 'Enabled' : 'Disabled'}
+• Trading Mode: ${config_1.config.trading.paperTrading ? '📄 Paper Trading' : '💰 Real Trading'}
 • Signal Cooldown: ${config_1.config.trading.signalCooldown / 60000} minutes
 • Breakout Threshold: ${config_1.config.strategy.breakoutThreshold}%
 
-*Ready to hunt for breakouts like Aug 26! 🎯*
+${config_1.config.trading.paperTrading ?
+                '*Ready for paper trading with real data! 📄*' :
+                '*Ready to hunt for real breakouts with live data! 🎯*'}
             `.trim();
-            await this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
+            await this.sendMessage(message);
             logger_1.logger.info('📱 Startup message sent to Telegram');
         }
         catch (error) {
@@ -139,7 +180,7 @@ ${config_1.config.trading.useMockData ? '🎭' : '⚡'} *Data Source:* ${config_
 
 *Tomorrow's target: Beat Aug 26 performance! 🚀*
             `.trim();
-            await this.bot.sendMessage(this.chatId, message, { parse_mode: 'Markdown' });
+            await this.sendMessage(message);
         }
         catch (error) {
             logger_1.logger.error('Failed to send daily summary:', error.message);

@@ -19,28 +19,22 @@ class WebSocketFeed {
             NIFTY: { prices: [], currentPrice: 0, lastUpdate: 0 },
             BANKNIFTY: { prices: [], currentPrice: 0, lastUpdate: 0 }
         };
-        this.mockInterval = null;
     }
     async initialize() {
         try {
-            if (config_1.config.trading.useMockData) {
-                logger_1.logger.info('Using mock data, starting mock WebSocket feed');
-                this.startMockFeed();
-                return true;
-            }
+            logger_1.logger.info('Initializing real-time Angel One WebSocket feed');
             const authResult = await angelAPI_1.angelAPI.authenticate();
             if (!authResult) {
-                logger_1.logger.warn('Angel authentication failed, using mock feed');
-                this.startMockFeed();
-                return false;
+                logger_1.logger.error('Angel authentication failed - cannot proceed without real data');
+                throw new Error('Authentication required for real trading data');
             }
             await this.connect();
             return true;
         }
         catch (error) {
             logger_1.logger.error('WebSocket initialization failed:', error.message);
-            this.startMockFeed();
-            return false;
+            logger_1.logger.error('CRITICAL: Cannot operate without real market data');
+            throw error;
         }
     }
     async connect() {
@@ -72,16 +66,15 @@ class WebSocketFeed {
             this.ws.on('error', (error) => {
                 logger_1.logger.error('WebSocket error:', error.message);
                 this.isConnected = false;
-                // If connection fails, fall back to mock data
                 if (error.message.includes('401') || error.message.includes('403')) {
-                    logger_1.logger.error('Authentication failed for WebSocket. Switching to mock data.');
-                    this.startMockFeed();
+                    logger_1.logger.error('CRITICAL: Authentication failed for WebSocket - cannot proceed without real data');
+                    throw new Error('WebSocket authentication failed');
                 }
             });
         }
         catch (error) {
             logger_1.logger.error('WebSocket connection failed:', error.message);
-            this.startMockFeed();
+            throw error;
         }
     }
     subscribe() {
@@ -140,30 +133,6 @@ class WebSocketFeed {
             source: 'WebSocket'
         });
     }
-    startMockFeed() {
-        if (this.mockInterval) {
-            clearInterval(this.mockInterval);
-        }
-        let niftyPrice = config_1.config.indices.NIFTY.basePrice;
-        let bankNiftyPrice = config_1.config.indices.BANKNIFTY.basePrice;
-        let trend = 1;
-        this.mockInterval = setInterval(() => {
-            // Simulate realistic market movements
-            const volatility = 0.3 + Math.random() * 0.4;
-            const niftyMove = (Math.random() - 0.5) * 2 * trend * volatility * 15;
-            const bankNiftyMove = niftyMove * 2.2; // Higher volatility
-            niftyPrice = Math.max(23000, Math.min(26000, niftyPrice + niftyMove));
-            bankNiftyPrice = Math.max(52000, Math.min(58000, bankNiftyPrice + bankNiftyMove));
-            // Random trend changes
-            if (Math.random() < 0.02) {
-                trend *= -1;
-            }
-            this.updatePrice('NIFTY', niftyPrice);
-            this.updatePrice('BANKNIFTY', bankNiftyPrice);
-        }, 1000); // Update every second
-        logger_1.logger.info('🎭 Mock WebSocket feed started');
-        this.isConnected = true;
-    }
     addSubscriber(callback) {
         this.subscribers.push(callback);
     }
@@ -185,25 +154,22 @@ class WebSocketFeed {
     }
     scheduleReconnect() {
         if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-            logger_1.logger.error('Max reconnection attempts reached, switching to mock feed');
-            this.startMockFeed();
-            return;
+            logger_1.logger.error('CRITICAL: Max reconnection attempts reached - cannot proceed without real market data');
+            throw new Error('WebSocket connection permanently failed');
         }
         const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
         this.reconnectAttempts++;
         setTimeout(() => {
             logger_1.logger.info(`🔄 Reconnecting WebSocket (attempt ${this.reconnectAttempts})...`);
-            this.connect();
+            this.connect().catch(error => {
+                logger_1.logger.error('Reconnection failed:', error.message);
+            });
         }, delay);
     }
     disconnect() {
         if (this.ws) {
             this.ws.close();
             this.ws = null;
-        }
-        if (this.mockInterval) {
-            clearInterval(this.mockInterval);
-            this.mockInterval = null;
         }
         this.isConnected = false;
     }

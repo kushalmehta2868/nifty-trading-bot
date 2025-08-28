@@ -12,6 +12,7 @@ interface ActiveOrder {
   exitPrice?: number;
   exitReason?: 'TARGET' | 'STOPLOSS' | 'MANUAL';
   pnl?: number;
+  isPaperTrade?: boolean; // Track paper vs real trades
 }
 
 interface OrderResult {
@@ -56,36 +57,70 @@ class OrderService {
 
       logger.info(`🔄 Processing order for ${signal.optionSymbol}`);
 
-      // Check available balance before placing order
-      const hasBalance = await this.checkSufficientBalance(signal);
-      if (!hasBalance) {
-        logger.error('❌ Insufficient balance to place order - skipping signal');
-        (process as any).emit('balanceInsufficient', {
-          signal,
-          message: `⚠️ *INSUFFICIENT BALANCE*\n📈 *${signal.optionSymbol}*\n\n❌ Cannot place order - insufficient funds\n💰 Please add margin to continue trading`
-        });
-        return;
+      // Check available balance only for real trading
+      if (!config.trading.paperTrading) {
+        const hasBalance = await this.checkSufficientBalance(signal);
+        if (!hasBalance) {
+          logger.error('❌ Insufficient balance to place order - skipping signal');
+          (process as any).emit('balanceInsufficient', {
+            signal,
+            message: `⚠️ *INSUFFICIENT BALANCE*\n📈 *${signal.optionSymbol}*\n\n❌ Cannot place order - insufficient funds\n💰 Please add margin to continue trading`
+          });
+          return;
+        }
+      } else {
+        logger.info('📄 Paper trading mode - skipping balance check');
       }
 
-      // Place real order via Angel API
-      const orderResponse = await this.placeRealOrder(signal);
-
-      if (orderResponse.status && orderResponse.data?.orderid) {
+      // Place order (real or paper trading)
+      if (config.trading.paperTrading) {
+        // Paper Trading Mode - Simulate order placement
+        const paperOrderId = this.generatePaperOrderId();
+        
         this.activeOrders.push({
           signal,
-          orderId: orderResponse.data.orderid,
+          orderId: paperOrderId,
           status: 'PLACED',
-          timestamp: new Date()
+          timestamp: new Date(),
+          isPaperTrade: true
         });
 
         this.dailyTrades++;
-        logger.info(`✅ Real order placed: ${signal.optionSymbol} - Order ID: ${orderResponse.data.orderid}`);
-
-        // Send confirmation to Telegram
-        (process as any).emit('orderPlaced', { signal, orderId: orderResponse.data.orderid });
+        logger.info(`📄 Paper order simulated: ${signal.optionSymbol} - Paper Order ID: ${paperOrderId}`);
+        
+        // Fill paper order immediately (no artificial delays)
+        setTimeout(() => {
+          this.simulateOrderFill(paperOrderId, signal);
+        }, 100); // Minimal delay for async processing
+        
+        // Send paper confirmation to Telegram
+        (process as any).emit('orderPlaced', { 
+          signal, 
+          orderId: paperOrderId,
+          isPaperTrade: true
+        });
       } else {
-        logger.error(`Order placement failed: ${orderResponse.message}`);
-        throw new Error(`Order failed: ${orderResponse.message}`);
+        // Real Trading Mode
+        const orderResponse = await this.placeRealOrder(signal);
+
+        if (orderResponse.status && orderResponse.data?.orderid) {
+          this.activeOrders.push({
+            signal,
+            orderId: orderResponse.data.orderid,
+            status: 'PLACED',
+            timestamp: new Date(),
+            isPaperTrade: false
+          });
+
+          this.dailyTrades++;
+          logger.info(`✅ Real order placed: ${signal.optionSymbol} - Order ID: ${orderResponse.data.orderid}`);
+
+          // Send confirmation to Telegram
+          (process as any).emit('orderPlaced', { signal, orderId: orderResponse.data.orderid });
+        } else {
+          logger.error(`Order placement failed: ${orderResponse.message}`);
+          throw new Error(`Order failed: ${orderResponse.message}`);
+        }
       }
 
     } catch (error) {
@@ -212,6 +247,25 @@ class OrderService {
     try {
       logger.debug(`🔍 Checking ${this.activeOrders.length} active orders...`);
 
+      // Separate real and paper trades
+      const realTrades = this.activeOrders.filter(order => !order.isPaperTrade);
+      const paperTrades = this.activeOrders.filter(order => order.isPaperTrade);
+
+      if (paperTrades.length > 0) {
+        logger.debug(`📄 Paper trades: ${paperTrades.length} (real-time price monitoring)`);
+        
+        // Check paper trades for exits using real market prices
+        for (const paperOrder of paperTrades) {
+          await this.checkPaperTradeExit(paperOrder);
+        }
+      }
+
+      // Only check real API order/trade books for real trades
+      if (realTrades.length === 0) {
+        logger.debug('📄 All trades are paper trades - skipping order/trade book API calls');
+        return;
+      }
+
       // REDUNDANT CHECK 1: Order Book - Get current order status
       const orderBookResponse = await angelAPI.getOrderBook();
 
@@ -223,7 +277,8 @@ class OrderService {
         return;
       }
 
-      for (const activeOrder of this.activeOrders) {
+      // Process only real trades
+      for (const activeOrder of realTrades) {
         if (activeOrder.status === 'EXITED_TARGET' || activeOrder.status === 'EXITED_SL') {
           continue; // Skip already processed exits
         }
@@ -371,8 +426,13 @@ class OrderService {
   }
 
   private sendEntryNotification(order: ActiveOrder): void {
+    const tradeType = order.isPaperTrade ? '📄 PAPER TRADE' : '💰 REAL TRADE';
+    const monitoringText = order.isPaperTrade ? 
+      '🎯 *Paper exits simulated automatically*' : 
+      '🤖 *Bracket exits are active - Angel One monitoring...*';
+    
     const message = `
-✅ *ENTRY EXECUTED*
+✅ *ENTRY EXECUTED* ${tradeType}
 📈 *${order.signal.optionSymbol}*
 
 *Entry Price:* ₹${order.entryPrice}
@@ -380,7 +440,7 @@ class OrderService {
 *Stop Loss:* ₹${order.signal.stopLoss}
 *Time:* ${new Date().toLocaleTimeString()}
 
-🤖 *Bracket exits are active - Angel One monitoring...*
+${monitoringText}
     `.trim();
 
     (process as any).emit('orderFilled', { order, message });
@@ -391,9 +451,10 @@ class OrderService {
     const emoji = isProfit ? '🚀' : '🛑';
     const resultText = isProfit ? 'PROFIT BOOKED' : 'STOP LOSS HIT';
     const pnlColor = isProfit ? '💰' : '💸';
+    const tradeType = order.isPaperTrade ? '📄 PAPER TRADE' : '💰 REAL TRADE';
 
     const message = `
-${emoji} *${resultText}*
+${emoji} *${resultText}* ${tradeType}
 📈 *${order.signal.optionSymbol}*
 
 *Entry:* ₹${order.entryPrice}
@@ -419,23 +480,32 @@ ${pnlColor} *P&L:* ₹${order.pnl?.toFixed(2)}
 
   public async getDailyBalanceSummary(): Promise<string> {
     try {
-      const availableMargin = await angelAPI.getAvailableMargin();
-      const fundsResponse = await angelAPI.getFunds();
-
       let summary = `💰 *Daily Balance Summary*\n\n`;
-      summary += `*Available Margin:* ₹${availableMargin.toFixed(2)}\n`;
-
-      if (fundsResponse?.data) {
-        const data = fundsResponse.data;
-        if (data.net) summary += `*Net Worth:* ₹${parseFloat(data.net).toFixed(2)}\n`;
-        if (data.utilisedamount) summary += `*Utilised:* ₹${parseFloat(data.utilisedamount).toFixed(2)}\n`;
-        if (data.payin) summary += `*Total Fund:* ₹${parseFloat(data.payin).toFixed(2)}\n`;
+      
+      // Only fetch real balance data in real trading mode
+      if (!config.trading.paperTrading) {
+        const availableMargin = await angelAPI.getAvailableMargin();
+        const fundsResponse = await angelAPI.getFunds();
+        
+        summary += `*Available Margin:* ₹${availableMargin.toFixed(2)}\n`;
+        
+        if (fundsResponse?.data) {
+          const data = fundsResponse.data;
+          if (data.net) summary += `*Net Worth:* ₹${parseFloat(data.net).toFixed(2)}\n`;
+          if (data.utilisedamount) summary += `*Utilised:* ₹${parseFloat(data.utilisedamount).toFixed(2)}\n`;
+          if (data.payin) summary += `*Total Fund:* ₹${parseFloat(data.payin).toFixed(2)}\n`;
+        }
+      } else {
+        summary += `📄 *Paper Trading Mode*\n`;
+        summary += `*Virtual Balance:* Unlimited\n`;
+        summary += `*No real funds used*\n`;
       }
 
       summary += `\n📊 *Trading Stats:*\n`;
       summary += `*Daily Trades:* ${this.dailyTrades}\n`;
-      summary += `*Daily P&L:* ₹${this.dailyPnL.toFixed(2)}\n`;
+      summary += `*Daily P&L:* ₹${this.dailyPnL.toFixed(2)} ${config.trading.paperTrading ? '(virtual)' : '(real)'}\n`;
       summary += `*Active Orders:* ${this.activeOrders.length}\n`;
+      summary += `*Trading Mode:* ${config.trading.paperTrading ? '📄 Paper' : '💰 Real'}\n`;
 
       return summary;
     } catch (error) {
@@ -457,7 +527,16 @@ ${pnlColor} *P&L:* ₹${order.pnl?.toFixed(2)}
         return false;
       }
 
-      // Cancel via real Angel API
+      const order = this.activeOrders[orderIndex];
+
+      // Handle paper trade cancellation
+      if (order.isPaperTrade) {
+        order.status = 'CANCELLED';
+        logger.info(`📄 Paper order ${orderId} cancelled successfully`);
+        return true;
+      }
+
+      // Cancel real order via Angel API
       const response = await angelAPI.makeRequest(
         '/rest/secure/angelbroking/order/v1/cancelOrder',
         'POST',
@@ -465,8 +544,8 @@ ${pnlColor} *P&L:* ₹${order.pnl?.toFixed(2)}
       );
 
       if (response.status) {
-        this.activeOrders[orderIndex].status = 'CANCELLED';
-        logger.info(`Real order ${orderId} cancelled successfully`);
+        order.status = 'CANCELLED';
+        logger.info(`💰 Real order ${orderId} cancelled successfully`);
         return true;
       } else {
         logger.error(`Order cancellation failed: ${response.message}`);
@@ -510,6 +589,116 @@ ${pnlColor} *P&L:* ₹${order.pnl?.toFixed(2)}
       logger.error('Failed to check balance:', (error as Error).message);
       logger.warn('⚠️ Proceeding without balance check due to API error');
       return true; // Proceed if balance check fails (API might be down temporarily)
+    }
+  }
+
+  private generatePaperOrderId(): string {
+    const timestamp = Date.now();
+    const random = Math.floor(Math.random() * 1000);
+    return `PAPER_${timestamp}_${random}`;
+  }
+
+  private async simulateOrderFill(orderId: string, signal: TradingSignal): Promise<void> {
+    try {
+      const orderIndex = this.activeOrders.findIndex(order => order.orderId === orderId);
+      if (orderIndex === -1) return;
+
+      const order = this.activeOrders[orderIndex];
+      
+      // Use real entry price from signal - no simulation needed
+      order.status = 'FILLED';
+      order.entryPrice = signal.entryPrice;
+      
+      logger.info(`📄 Paper order filled: ${signal.optionSymbol} @ ₹${signal.entryPrice.toFixed(2)} (real price)`);
+      
+      // Send entry notification
+      this.sendEntryNotification(order);
+      
+      // Paper trades now use real-time price monitoring like real trades
+      logger.info(`📄 Paper trade will exit when real market price hits target/SL`);
+      
+    } catch (error) {
+      logger.error('Paper order fill simulation failed:', (error as Error).message);
+    }
+  }
+
+  private async checkPaperTradeExit(activeOrder: ActiveOrder): Promise<void> {
+    if (!activeOrder.isPaperTrade || activeOrder.status !== 'FILLED') return;
+
+    try {
+      // Get real-time option price from Angel One API
+      const expiry = this.generateExpiryString();
+      const strike = this.calculateStrike(activeOrder.signal.spotPrice, activeOrder.signal.indexName);
+      
+      const symbolToken = await angelAPI.getOptionToken(
+        activeOrder.signal.indexName,
+        strike,
+        activeOrder.signal.optionType,
+        expiry
+      );
+
+      if (!symbolToken) {
+        logger.debug(`Could not get symbol token for ${activeOrder.signal.optionSymbol} - skipping price check`);
+        return;
+      }
+
+      const currentPrice = await angelAPI.getOptionPrice(activeOrder.signal.optionSymbol, symbolToken);
+      
+      if (!currentPrice) {
+        logger.debug(`Could not get current price for ${activeOrder.signal.optionSymbol} - skipping exit check`);
+        return;
+      }
+
+      const target = activeOrder.signal.target;
+      const stopLoss = activeOrder.signal.stopLoss;
+      const entryPrice = activeOrder.entryPrice || activeOrder.signal.entryPrice;
+
+      // Check if current market price hit target or stop loss
+      let shouldExit = false;
+      let exitPrice: number = 0;
+      let exitReason: 'TARGET' | 'STOPLOSS' = 'TARGET';
+
+      if (currentPrice >= target) {
+        // Target hit
+        shouldExit = true;
+        exitPrice = target;
+        exitReason = 'TARGET';
+      } else if (currentPrice <= stopLoss) {
+        // Stop loss hit
+        shouldExit = true;
+        exitPrice = stopLoss;
+        exitReason = 'STOPLOSS';
+      }
+
+      if (shouldExit) {
+        // Prevent duplicate processing
+        if (activeOrder.exitPrice) {
+          logger.debug(`Exit already processed for ${activeOrder.signal.optionSymbol}`);
+          return;
+        }
+
+        // Calculate P&L
+        const pnl = (exitPrice - entryPrice) * config.indices[activeOrder.signal.indexName].lotSize;
+
+        // Update order status
+        activeOrder.status = exitReason === 'TARGET' ? 'EXITED_TARGET' : 'EXITED_SL';
+        activeOrder.exitPrice = exitPrice;
+        activeOrder.exitReason = exitReason;
+        activeOrder.pnl = pnl;
+
+        // Update daily P&L
+        this.dailyPnL += pnl;
+
+        logger.info(`📄 Paper exit by real market price: ${activeOrder.signal.optionSymbol} @ ₹${exitPrice.toFixed(2)} (market: ₹${currentPrice.toFixed(2)}) - ${exitReason} - P&L: ₹${pnl.toFixed(2)}`);
+
+        // Send exit notification
+        this.sendExitNotification(activeOrder);
+      } else {
+        logger.debug(`📄 ${activeOrder.signal.optionSymbol}: Current ₹${currentPrice.toFixed(2)} (Target: ₹${target}, SL: ₹${stopLoss})`);
+      }
+
+    } catch (error) {
+      logger.debug(`Paper trade exit check failed for ${activeOrder.signal.optionSymbol}:`, (error as Error).message);
     }
   }
 

@@ -6,13 +6,11 @@ declare class WebSocketFeed {
     private maxReconnectAttempts;
     private subscribers;
     private priceData;
-    private mockInterval;
     initialize(): Promise<boolean>;
     private connect;
     private subscribe;
     private handleMessage;
     private updatePrice;
-    private startMockFeed;
     addSubscriber(callback: PriceSubscriber): void;
     private notifySubscribers;
     getCurrentPrice(indexName: IndexName): number;

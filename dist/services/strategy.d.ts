@@ -5,10 +5,11 @@ declare class TradingStrategy {
     private processTick;
     private analyzeSignal;
     private executeSignal;
+    private getRealOptionPrice;
+    private generateExpiryString;
     private calculateEMA;
     private calculateRSI;
     private calculateStrike;
-    private estimateOptionPrice;
     private generateOptionSymbol;
     private isInCooldown;
 }

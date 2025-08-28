@@ -72,15 +72,11 @@ class AngelAPI {
         }
     }
     async authenticate() {
-        if (config_1.config.trading.useMockData) {
-            logger_1.logger.info('Using mock data, skipping Angel authentication');
-            return true;
-        }
+        logger_1.logger.info('Authenticating with Angel One API - Real trading mode only');
         // Validate configuration before attempting authentication
         if (!this.validateConfig()) {
-            logger_1.logger.error('Angel API configuration is incomplete');
-            config_1.config.trading.useMockData = true;
-            return false;
+            logger_1.logger.error('CRITICAL: Angel API configuration is incomplete - cannot proceed without valid credentials');
+            throw new Error('Angel One API configuration required');
         }
         try {
             // Try loading existing tokens
@@ -91,19 +87,18 @@ class AngelAPI {
             return await this.freshLogin();
         }
         catch (error) {
-            logger_1.logger.error('Angel authentication failed:', error.message);
+            logger_1.logger.error('CRITICAL: Angel authentication failed:', error.message);
             // Provide specific guidance based on error type
             if (error.message.includes('Invalid Token') ||
                 error.message.includes('AG8001')) {
-                logger_1.logger.error('This usually indicates:');
+                logger_1.logger.error('Authentication failure - This usually indicates:');
                 logger_1.logger.error('1. Incorrect API credentials');
                 logger_1.logger.error('2. Invalid TOTP secret format');
                 logger_1.logger.error('3. API key not activated or expired');
                 logger_1.logger.error('Please verify your credentials with Angel Broking');
             }
-            logger_1.logger.warn('Falling back to mock data');
-            config_1.config.trading.useMockData = true;
-            return false;
+            logger_1.logger.error('CRITICAL: Cannot proceed without valid Angel One authentication');
+            throw error;
         }
     }
     validateConfig() {
@@ -254,6 +249,114 @@ class AngelAPI {
             tradingSymbol,
             symbolToken
         });
+    }
+    // Search for option contracts
+    async searchScrips(exchange, searchtext) {
+        return this.makeRequest('/rest/secure/angelbroking/order/v1/searchScrip', 'POST', {
+            exchange,
+            searchtext
+        });
+    }
+    // Get option chain data
+    async getOptionChain(exchange, symbolname, strikeprice, optiontype) {
+        return this.makeRequest('/rest/secure/angelbroking/order/v1/optionGreeks', 'POST', {
+            exchange,
+            symbolname,
+            strikeprice,
+            optiontype
+        });
+    }
+    // Get real-time option price using symbol token
+    async getOptionPrice(tradingSymbol, symbolToken) {
+        try {
+            const response = await this.getLTP('NFO', tradingSymbol, symbolToken);
+            if (response && response.data && response.data.ltp) {
+                return parseFloat(response.data.ltp);
+            }
+            logger_1.logger.warn(`Could not fetch option price for ${tradingSymbol}`);
+            return null;
+        }
+        catch (error) {
+            logger_1.logger.error(`Failed to get option price for ${tradingSymbol}:`, error.message);
+            return null;
+        }
+    }
+    // Get option symbol token (required for price fetching)
+    async getOptionToken(indexName, strike, optionType, expiry) {
+        try {
+            const symbol = `${indexName}${expiry}${strike}${optionType}`;
+            const response = await this.searchScrips('NFO', symbol);
+            if (response && response.data && response.data.length > 0) {
+                return response.data[0].symboltoken;
+            }
+            logger_1.logger.warn(`Could not find token for option: ${symbol}`);
+            return null;
+        }
+        catch (error) {
+            logger_1.logger.error(`Failed to get option token:`, error.message);
+            return null;
+        }
+    }
+    // Get order status and details
+    async getOrderStatus(orderId) {
+        try {
+            const response = await this.makeRequest('/rest/secure/angelbroking/order/v1/details', 'POST', { orderid: orderId });
+            return response;
+        }
+        catch (error) {
+            logger_1.logger.error(`Failed to get order status for ${orderId}:`, error.message);
+            throw error;
+        }
+    }
+    // Get order book (all orders)
+    async getOrderBook() {
+        try {
+            const response = await this.makeRequest('/rest/secure/angelbroking/order/v1/orderBook');
+            return response;
+        }
+        catch (error) {
+            logger_1.logger.error('Failed to get order book:', error.message);
+            throw error;
+        }
+    }
+    // Get trade book (executed orders)
+    async getTradeBook() {
+        try {
+            const response = await this.makeRequest('/rest/secure/angelbroking/order/v1/tradeBook');
+            return response;
+        }
+        catch (error) {
+            logger_1.logger.error('Failed to get trade book:', error.message);
+            throw error;
+        }
+    }
+    // Get account balance and available funds
+    async getFunds() {
+        try {
+            const response = await this.makeRequest('/rest/secure/angelbroking/user/v1/getRMS');
+            return response;
+        }
+        catch (error) {
+            logger_1.logger.error('Failed to get account funds:', error.message);
+            throw error;
+        }
+    }
+    // Get available margin for trading
+    async getAvailableMargin() {
+        try {
+            const fundsResponse = await this.getFunds();
+            if (fundsResponse?.data?.availablecash) {
+                const availableMargin = parseFloat(fundsResponse.data.availablecash);
+                logger_1.logger.info(`💰 Available trading margin: ₹${availableMargin.toFixed(2)}`);
+                return availableMargin;
+            }
+            logger_1.logger.warn('Could not retrieve available margin from funds response');
+            return 0;
+        }
+        catch (error) {
+            logger_1.logger.error('Failed to get available margin:', error.message);
+            return 0;
+        }
     }
 }
 exports.angelAPI = new AngelAPI();
