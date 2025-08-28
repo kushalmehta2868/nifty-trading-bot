@@ -7,10 +7,11 @@
         "start": "node dist/app.js",
         "start:ts": "ts-node src/app.ts",
         "dev": "nodemon --exec ts-node src/app.ts",
-        "build": "tsc",
+        "build": "npm run clean && tsc",
         "build:watch": "tsc --watch",
         "test": "ts-node scripts/test.ts",
-        "clean": "rm -rf dist"
+        "clean": "rm -rf dist",
+        "postinstall": "npm run build"
     },
     "dependencies": {
         "axios": "^1.5.0",
