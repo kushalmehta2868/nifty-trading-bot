@@ -80,6 +80,11 @@ export interface TechnicalIndicators {
   ema: number;
   rsi: number;
   priceChange: number;
+  vwap?: number;
+  currentVolume?: number;
+  avgVolume?: number;
+  volumeRatio?: number;
+  ivRank?: number;
 }
 
 export interface TradingSignal {
@@ -105,7 +110,9 @@ export interface PriceUpdate {
 
 export interface PriceData {
   prices: number[];
+  volumes?: number[];
   currentPrice: number;
+  currentVolume?: number;
   lastUpdate: number;
 }
 
@@ -118,6 +125,7 @@ export interface MarketData {
 export interface WebSocketMessage {
   token?: string;
   ltp?: string | number;
+  volume?: string | number;
   action?: number;
   mode?: number;
 }

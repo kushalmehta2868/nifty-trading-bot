@@ -399,6 +399,151 @@ class AngelAPI {
       return 0;
     }
   }
+
+  // Get market depth with volume data
+  public async getMarketDepth(
+    exchange: string,
+    tradingSymbol: string,
+    symbolToken: string
+  ): Promise<any> {
+    try {
+      const response = await this.makeRequest(
+        '/rest/secure/angelbroking/order/v1/getMarketData',
+        'POST',
+        {
+          exchange,
+          tradingsymbol: tradingSymbol,
+          symboltoken: symbolToken
+        }
+      );
+      return response;
+    } catch (error) {
+      logger.error(`Failed to get market depth for ${tradingSymbol}:`, (error as Error).message);
+      return null;
+    }
+  }
+
+  // Get candlestick data with volume
+  public async getCandleData(
+    exchange: string,
+    symboltoken: string,
+    interval: string,
+    fromdate: string,
+    todate: string
+  ): Promise<any> {
+    try {
+      const response = await this.makeRequest(
+        '/rest/secure/angelbroking/historical/v1/getCandleData',
+        'POST',
+        {
+          exchange,
+          symboltoken,
+          interval,
+          fromdate,
+          todate
+        }
+      );
+      return response;
+    } catch (error) {
+      logger.error('Failed to get candle data:', (error as Error).message);
+      return null;
+    }
+  }
+
+  // Get option Greeks and IV data
+  public async getOptionGreeks(
+    exchange: string = 'NFO',
+    symbolname: string,
+    strikeprice: string,
+    optiontype: 'CE' | 'PE'
+  ): Promise<any> {
+    try {
+      const response = await this.makeRequest(
+        '/rest/secure/angelbroking/order/v1/optionGreeks',
+        'POST',
+        {
+          exchange,
+          symbolname,
+          strikeprice,
+          optiontype
+        }
+      );
+      return response;
+    } catch (error) {
+      logger.error('Failed to get option Greeks:', (error as Error).message);
+      return null;
+    }
+  }
+
+  // Get real-time quote with volume
+  public async getQuote(
+    exchange: string,
+    tradingSymbol: string,
+    symbolToken: string
+  ): Promise<any> {
+    try {
+      const response = await this.makeRequest(
+        '/rest/secure/angelbroking/order/v1/getQuote',
+        'POST',
+        {
+          exchange,
+          tradingsymbol: tradingSymbol,
+          symboltoken: symbolToken
+        }
+      );
+      return response;
+    } catch (error) {
+      logger.error(`Failed to get quote for ${tradingSymbol}:`, (error as Error).message);
+      return null;
+    }
+  }
+
+  // Get volume data for index
+  public async getVolumeData(
+    indexName: 'NIFTY' | 'BANKNIFTY'
+  ): Promise<{ volume: number; avgVolume: number } | null> {
+    try {
+      const tokenMap = {
+        'NIFTY': config.indices.NIFTY.token,
+        'BANKNIFTY': config.indices.BANKNIFTY.token
+      };
+
+      const quote = await this.getQuote('NSE', indexName, tokenMap[indexName]);
+      
+      if (quote?.data) {
+        const currentVolume = parseFloat(quote.data.volume || '0');
+        
+        // Get historical data for average volume calculation (last 20 days)
+        const toDate = new Date().toISOString().split('T')[0];
+        const fromDate = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+        
+        const candleData = await this.getCandleData(
+          'NSE',
+          tokenMap[indexName],
+          'ONE_DAY',
+          fromDate,
+          toDate
+        );
+
+        let avgVolume = currentVolume; // Default fallback
+        if (candleData?.data && Array.isArray(candleData.data)) {
+          const volumes = candleData.data.map((candle: any) => parseFloat(candle[5] || '0'));
+          avgVolume = volumes.reduce((sum: number, vol: number) => sum + vol, 0) / volumes.length;
+        }
+
+        logger.debug(`Volume data for ${indexName}: Current=${currentVolume}, Avg=${avgVolume}`);
+        return {
+          volume: currentVolume,
+          avgVolume: avgVolume
+        };
+      }
+
+      return null;
+    } catch (error) {
+      logger.error(`Failed to get volume data for ${indexName}:`, (error as Error).message);
+      return null;
+    }
+  }
 }
 
 export const angelAPI = new AngelAPI();

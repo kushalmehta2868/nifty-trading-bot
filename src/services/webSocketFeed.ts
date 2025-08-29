@@ -19,8 +19,8 @@ class WebSocketFeed {
   private maxReconnectAttempts = 5;
   private subscribers: PriceSubscriber[] = [];
   private priceData: MarketData = {
-    NIFTY: { prices: [], currentPrice: 0, lastUpdate: 0 },
-    BANKNIFTY: { prices: [], currentPrice: 0, lastUpdate: 0 }
+    NIFTY: { prices: [], volumes: [], currentPrice: 0, currentVolume: 0, lastUpdate: 0 },
+    BANKNIFTY: { prices: [], volumes: [], currentPrice: 0, currentVolume: 0, lastUpdate: 0 }
   };
   private pingInterval: NodeJS.Timeout | null = null;
   private pongTimeout: NodeJS.Timeout | null = null;
@@ -121,7 +121,7 @@ class WebSocketFeed {
   private subscribe(): void {
     const subscribeMsg: SubscriptionMessage = {
       action: 1, // Subscribe
-      mode: 1,   // LTP
+      mode: 3,   // Full mode (includes LTP, volume, OI, etc.)
       tokenList: [
         {
           exchangeType: 1,
@@ -132,7 +132,7 @@ class WebSocketFeed {
 
     if (this.isConnected && this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(subscribeMsg));
-      logger.info('📡 Subscribed to NIFTY & Bank NIFTY live feeds');
+      logger.info('📡 Subscribed to NIFTY & Bank NIFTY live feeds with full market data (including volume)');
     }
   }
 
@@ -152,7 +152,13 @@ class WebSocketFeed {
         if (indexName) {
           const price = typeof message.ltp === 'string' ? 
             parseFloat(message.ltp) : message.ltp;
-          this.updatePrice(indexName, price);
+          
+          // Extract volume from WebSocket message if available
+          const volume = message.volume ? 
+            (typeof message.volume === 'string' ? parseFloat(message.volume) : message.volume) : 
+            0;
+            
+          this.updatePrice(indexName, price, volume);
         }
       }
 
@@ -161,18 +167,28 @@ class WebSocketFeed {
     }
   }
 
-  private updatePrice(indexName: IndexName, price: number): void {
+  private updatePrice(indexName: IndexName, price: number, volume: number = 0): void {
     const priceData: PriceData = this.priceData[indexName];
     const now = Date.now();
 
-    // Update current price
+    // Update current price and volume
     priceData.currentPrice = price;
+    priceData.currentVolume = volume;
     priceData.lastUpdate = now;
 
     // Add to price history
     priceData.prices.push(price);
     if (priceData.prices.length > 100) {
       priceData.prices.shift();
+    }
+
+    // Add to volume history
+    if (!priceData.volumes) {
+      priceData.volumes = [];
+    }
+    priceData.volumes.push(volume);
+    if (priceData.volumes.length > 100) {
+      priceData.volumes.shift();
     }
 
     // Notify subscribers
@@ -204,6 +220,10 @@ class WebSocketFeed {
 
   public getPriceHistory(indexName: IndexName): number[] {
     return this.priceData[indexName].prices;
+  }
+
+  public getPriceData(indexName: IndexName): PriceData {
+    return this.priceData[indexName];
   }
 
   private scheduleReconnect(): void {

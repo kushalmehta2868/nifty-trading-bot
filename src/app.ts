@@ -18,6 +18,7 @@ class WebSocketTradingBot {
   };
   private dailySummaryTimeout: NodeJS.Timeout | null = null;
   private marketOpenTimeout: NodeJS.Timeout | null = null;
+  private heartbeatInterval: NodeJS.Timeout | null = null;
 
   public async start(): Promise<void> {
     try {
@@ -63,6 +64,10 @@ class WebSocketTradingBot {
       this.isRunning = true;
       logger.info('✅ WebSocket Trading Bot Running - Monitoring Live Market');
       logger.info('🎯 Waiting for breakout signals...');
+      logger.info('🔴 BOT STATUS: ACTIVE AND MONITORING FOR BREAKOUT SIGNALS');
+      
+      // Start heartbeat logger
+      this.startHeartbeat();
 
     } catch (error) {
       logger.error('Failed to start WebSocket trading bot:', (error as Error).message);
@@ -111,6 +116,7 @@ class WebSocketTradingBot {
       
       this.isRunning = true;
       this.scheduleMarketClose();
+      this.startHeartbeat();
       
       logger.info('✅ Trading bot activated for market hours');
     }, timeUntilOpen);
@@ -126,6 +132,7 @@ class WebSocketTradingBot {
         // Disconnect trading services but keep bot running
         webSocketFeed.disconnect();
         this.isRunning = false;
+        this.stopHeartbeat();
         
         // Schedule next market open
         this.scheduleMarketOpen();
@@ -154,6 +161,9 @@ class WebSocketTradingBot {
       this.marketOpenTimeout = null;
     }
 
+    // Stop heartbeat
+    this.stopHeartbeat();
+
     // Disconnect services
     webSocketFeed.disconnect();
     orderService.stopMonitoring();
@@ -172,6 +182,34 @@ class WebSocketTradingBot {
 
   public isActive(): boolean {
     return this.isRunning;
+  }
+
+  private startHeartbeat(): void {
+    // Clear existing heartbeat if any
+    this.stopHeartbeat();
+    
+    this.heartbeatInterval = setInterval(() => {
+      if (this.isRunning && isMarketOpen()) {
+        const uptime = Math.floor((Date.now() - this.startTime) / 1000);
+        const uptimeMinutes = Math.floor(uptime / 60);
+        const uptimeHours = Math.floor(uptimeMinutes / 60);
+        const displayMinutes = uptimeMinutes % 60;
+        
+        logger.info(`💚 BOT WORKING - Runtime: ${uptimeHours}h ${displayMinutes}m | Market: OPEN | Signals: ${this.stats.signals} | Status: MONITORING CE/PE CONDITIONS`);
+      } else if (this.isRunning && !isMarketOpen()) {
+        logger.info(`💛 BOT WORKING - Market: CLOSED | Status: WAITING FOR MARKET OPEN`);
+      }
+    }, 10000); // Every 10 seconds
+    
+    logger.debug('⏰ Heartbeat logger started (every 10 seconds)');
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+      logger.debug('⏰ Heartbeat logger stopped');
+    }
   }
 }
 
