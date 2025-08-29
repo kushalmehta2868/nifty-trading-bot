@@ -188,7 +188,7 @@ class WebSocketTradingBot {
     // Clear existing heartbeat if any
     this.stopHeartbeat();
     
-    this.heartbeatInterval = setInterval(() => {
+    this.heartbeatInterval = setInterval(async () => {
       if (this.isRunning && isMarketOpen()) {
         const uptime = Math.floor((Date.now() - this.startTime) / 1000);
         const uptimeMinutes = Math.floor(uptime / 60);
@@ -196,6 +196,14 @@ class WebSocketTradingBot {
         const displayMinutes = uptimeMinutes % 60;
         
         logger.info(`💚 BOT WORKING - Runtime: ${uptimeHours}h ${displayMinutes}m | Market: OPEN | Signals: ${this.stats.signals} | Status: MONITORING CE/PE CONDITIONS`);
+        
+        // Show current market conditions
+        try {
+          const marketConditions = await strategy.getCurrentMarketConditions();
+          logger.info(marketConditions);
+        } catch (error) {
+          logger.info('📊 Current Market Conditions: Error retrieving data');
+        }
       } else if (this.isRunning && !isMarketOpen()) {
         logger.info(`💛 BOT WORKING - Market: CLOSED | Status: WAITING FOR MARKET OPEN`);
       }

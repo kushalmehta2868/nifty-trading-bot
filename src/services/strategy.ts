@@ -500,6 +500,65 @@ class TradingStrategy {
     
     return currentTime >= startTime && currentTime <= endTime;
   }
+
+  public async getCurrentMarketConditions(): Promise<string> {
+    try {
+      let summary = '\n📊 Current Market Conditions:\n';
+      
+      for (const indexName of ['NIFTY', 'BANKNIFTY'] as IndexName[]) {
+        const buffer = this.priceBuffers[indexName];
+        const currentPrice = webSocketFeed.getCurrentPrice(indexName);
+        
+        if (buffer.length === 0 || currentPrice === 0) {
+          summary += `   ${indexName}: No data available\n`;
+          continue;
+        }
+        
+        const prices = buffer.map(item => item.price);
+        const volumes = buffer.map(item => item.volume || 0);
+        
+        if (prices.length < 5) {
+          summary += `   ${indexName}: Insufficient data (${prices.length} points)\n`;
+          continue;
+        }
+        
+        const rsi = this.calculateRSI(prices, Math.min(14, prices.length - 1));
+        const vwap = this.calculateVWAP(prices, volumes);
+        const currentVolume = volumes[volumes.length - 1];
+        const avgVolume = this.calculateAverageVolume(volumes);
+        const volumeRatio = avgVolume > 0 ? currentVolume / avgVolume : 1;
+        const triggerLevel = this.getTriggerLevel(currentPrice, indexName);
+        const ivRank = await this.calculateRealIVRank(indexName, currentPrice);
+        
+        const ceConditions = {
+          price_breakout: currentPrice > triggerLevel,
+          volume_surge: volumeRatio > 1.8,
+          momentum: rsi > 50 && rsi < 75,
+          trend_alignment: currentPrice > vwap,
+          volatility: ivRank > 25,
+          time_filter: this.isWithinTradingHours()
+        };
+        
+        const peConditions = {
+          price_breakout: currentPrice > triggerLevel,
+          volume_surge: volumeRatio > 1.8,
+          momentum: rsi > 45 && rsi < 70,
+          trend_alignment: currentPrice < vwap,
+          volatility: ivRank > 30,
+          time_filter: this.isWithinTradingHours()
+        };
+        
+        const ceMet = Object.values(ceConditions).filter(c => c === true).length;
+        const peMet = Object.values(peConditions).filter(c => c === true).length;
+        
+        summary += `   ${indexName}: ₹${currentPrice} | RSI: ${rsi.toFixed(1)} | Vol: ${volumeRatio.toFixed(1)}x | CE: ${ceMet}/6 | PE: ${peMet}/6\n`;
+      }
+      
+      return summary;
+    } catch (error) {
+      return '\n📊 Current Market Conditions: Error retrieving data\n';
+    }
+  }
 }
 
 export const strategy = new TradingStrategy();
