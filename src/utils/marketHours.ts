@@ -71,17 +71,18 @@ export function getMarketStatus(): { nse: boolean; trading: boolean; any: boolea
 }
 
 function getISTDate(date: Date = new Date()): Date {
-  // Use proper timezone conversion
-  return new Date(date.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+  // Convert to IST properly
+  const utcTime = date.getTime() + (date.getTimezoneOffset() * 60000);
+  const istOffset = 5.5 * 60 * 60 * 1000; // IST is UTC+5:30
+  return new Date(utcTime + istOffset);
 }
 
 export function getNextMarketOpen(date: Date = new Date()): Date {
   const istDate = getISTDate(date);
-  let nextOpen = new Date(istDate);
 
   // Check if market is currently open
   if (isNSEMarketOpen(date)) {
-    return nextOpen; // Market is already open
+    return new Date(date); // Return current time if market is open
   }
 
   // Check if today is a trading day and we're before market open
@@ -90,18 +91,29 @@ export function getNextMarketOpen(date: Date = new Date()): Date {
 
   if (isNSETradingDay(istDate) && currentTimeInMinutes < marketOpenInMinutes) {
     // Today is a trading day and market hasn't opened yet
-    nextOpen.setHours(NSE_MARKET_HOURS.open.hour, NSE_MARKET_HOURS.open.minute, 0, 0);
-    return nextOpen;
+    const todayOpen = new Date(istDate);
+    todayOpen.setHours(NSE_MARKET_HOURS.open.hour, NSE_MARKET_HOURS.open.minute, 0, 0);
+    
+    // Convert back to local timezone
+    const utcTime = todayOpen.getTime() - (5.5 * 60 * 60 * 1000);
+    const localTime = utcTime - (new Date().getTimezoneOffset() * 60000);
+    return new Date(localTime);
   }
 
   // Find the next trading day
-  nextOpen.setDate(nextOpen.getDate() + 1);
-  while (!isNSETradingDay(nextOpen)) {
-    nextOpen.setDate(nextOpen.getDate() + 1);
+  let nextDay = new Date(istDate);
+  nextDay.setDate(nextDay.getDate() + 1);
+  
+  while (!isNSETradingDay(nextDay)) {
+    nextDay.setDate(nextDay.getDate() + 1);
   }
 
-  nextOpen.setHours(NSE_MARKET_HOURS.open.hour, NSE_MARKET_HOURS.open.minute, 0, 0);
-  return nextOpen;
+  nextDay.setHours(NSE_MARKET_HOURS.open.hour, NSE_MARKET_HOURS.open.minute, 0, 0);
+  
+  // Convert back to local timezone
+  const utcTime = nextDay.getTime() - (5.5 * 60 * 60 * 1000);
+  const localTime = utcTime - (new Date().getTimezoneOffset() * 60000);
+  return new Date(localTime);
 }
 
 export function getTimeUntilMarketOpen(date: Date = new Date()): number {
@@ -110,7 +122,17 @@ export function getTimeUntilMarketOpen(date: Date = new Date()): number {
   }
 
   const nextOpen = getNextMarketOpen(date);
-  return nextOpen.getTime() - date.getTime();
+  const currentTime = date.getTime();
+  const timeUntilOpen = nextOpen.getTime() - currentTime;
+  
+  // Ensure we don't return negative values or extremely large values
+  if (timeUntilOpen < 0) {
+    return 0;
+  }
+  
+  // Cap at 7 days maximum (prevent scheduling errors)
+  const maxTime = 7 * 24 * 60 * 60 * 1000;
+  return Math.min(timeUntilOpen, maxTime);
 }
 
 export function formatTimeUntilMarketOpen(date: Date = new Date()): string {
@@ -131,8 +153,21 @@ export function formatTimeUntilMarketOpen(date: Date = new Date()): string {
 
   const nextOpen = getNextMarketOpen(date);
   const msUntilOpen = nextOpen.getTime() - date.getTime();
+  
+  // Prevent negative values
+  if (msUntilOpen < 0) {
+    return 'Market opening soon...';
+  }
+  
   const hours = Math.floor(msUntilOpen / (1000 * 60 * 60));
   const minutes = Math.floor((msUntilOpen % (1000 * 60 * 60)) / (1000 * 60));
+
+  // Debug logging for troubleshooting
+  console.log(`[DEBUG] Current time: ${date.toISOString()}`);
+  console.log(`[DEBUG] IST time: ${istDate.toISOString()}`);
+  console.log(`[DEBUG] Next open: ${nextOpen.toISOString()}`);
+  console.log(`[DEBUG] Ms until open: ${msUntilOpen}`);
+  console.log(`[DEBUG] Hours: ${hours}, Minutes: ${minutes}`);
 
   if (hours > 24) {
     const days = Math.floor(hours / 24);
