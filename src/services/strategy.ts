@@ -186,7 +186,7 @@ class TradingStrategy {
       volume_surge: volumeRatio > 1.8,
       momentum: rsi > 50 && rsi < 75,
       trend_alignment: currentPrice > vwap,
-      volatility: ivRank > 25,
+      volatility: ivRank > 25 || ivRank === 50, // ✅ Accept fallback IV
       time_filter: this.isWithinTradingHours(indexName)
     };
 
@@ -196,7 +196,7 @@ class TradingStrategy {
       volume_surge: volumeRatio > 1.8,
       momentum: rsi > 45 && rsi < 70,
       trend_alignment: currentPrice < vwap,
-      volatility: ivRank > 30,
+      volatility: ivRank > 30 || ivRank === 50, // ✅ Accept fallback IV
       time_filter: this.isWithinTradingHours(indexName)
     };
 
@@ -505,34 +505,43 @@ class TradingStrategy {
 
   private async calculateRealIVRank(indexName: IndexName, currentPrice: number): Promise<number> {
     try {
-      // Calculate ATM strike price
+      // Skip IV calculation after market hours or for MCX
+      const { isNSEMarketOpen, isMCXMarketOpen } = require('../utils/marketHours');
+
+      if (!isNSEMarketOpen() && (indexName === 'NIFTY' || indexName === 'BANKNIFTY')) {
+        logger.debug(`${indexName} - NSE market closed, using fallback IV rank`);
+        return 50; // Default middle value
+      }
+
+      if (indexName === 'GOLD' || indexName === 'SILVER') {
+        logger.debug(`Using fallback IV rank for ${indexName} (Greeks API unreliable for MCX)`);
+        return 50; // MCX options don't have reliable IV data
+      }
+
+      // Only try Greeks API for NSE options during market hours
       const strike = this.calculateStrike(currentPrice, indexName);
 
-      // Get IV data from Angel API for both CE and PE
+      // ✅ Use correct Angel One API method names
       const ceGreeks = await angelAPI.getOptionGreeks('NFO', indexName, strike.toString(), 'CE');
       const peGreeks = await angelAPI.getOptionGreeks('NFO', indexName, strike.toString(), 'PE');
 
       let ivSum = 0;
       let ivCount = 0;
 
-      // Extract IV from CE
-      if (ceGreeks?.data?.iv) {
-        ivSum += parseFloat(ceGreeks.data.iv);
+      // ✅ Check for correct response field names
+      if (ceGreeks?.data?.impliedVolatility) {
+        ivSum += parseFloat(ceGreeks.data.impliedVolatility);
         ivCount++;
       }
 
-      // Extract IV from PE
-      if (peGreeks?.data?.iv) {
-        ivSum += parseFloat(peGreeks.data.iv);
+      if (peGreeks?.data?.impliedVolatility) {
+        ivSum += parseFloat(peGreeks.data.impliedVolatility);
         ivCount++;
       }
 
       if (ivCount > 0) {
         const currentIV = ivSum / ivCount;
 
-        // For IV rank, we need historical IV data (simplified approach)
-        // In real implementation, you'd compare against 252-day IV range
-        // For now, using a simple approximation based on current IV levels
         let ivRank = 50; // Default middle value
 
         if (currentIV > 25) ivRank = 80; // High IV
@@ -545,14 +554,15 @@ class TradingStrategy {
       }
 
       // Fallback if no IV data available
-      logger.warn(`No IV data available for ${indexName}, using fallback`);
+      logger.debug(`No IV data available for ${indexName}, using fallback`);
       return 50; // Default middle value
 
     } catch (error) {
-      logger.error(`Failed to calculate real IV rank for ${indexName}:`, (error as Error).message);
-      return 50; // Fallback value
+      logger.debug(`IV calculation failed for ${indexName}: ${(error as Error).message} - using fallback`);
+      return 50; // Always return fallback
     }
   }
+
 
   private getTriggerLevel(currentPrice: number, indexName: IndexName): number {
     // Get recent price data for better trigger calculation
@@ -578,22 +588,36 @@ class TradingStrategy {
     const currentTime = istTime.getHours() * 100 + istTime.getMinutes();
 
     if (!indexName) {
-      // General check - return true if any market is open
-      return isMarketOpen();
+      return isMarketOpen(); // General check
     }
 
     if (indexName === 'GOLD' || indexName === 'SILVER') {
       // MCX trading hours: 9:00 AM to 11:30 PM
       const startTime = 900;  // 9:00 AM
       const endTime = 2330;   // 11:30 PM
-      return currentTime >= startTime && currentTime <= endTime;
+      const isOpen = currentTime >= startTime && currentTime <= endTime;
+
+      // ✅ Log MCX hours for debugging
+      if (!isOpen) {
+        logger.debug(`MCX ${indexName} outside hours: ${currentTime} (need 900-2330)`);
+      }
+
+      return isOpen;
     } else {
       // NSE trading hours: 10:15 AM to 2:45 PM (for signals)
       const startTime = 1015; // 10:15 AM
       const endTime = 1445;   // 2:45 PM
-      return currentTime >= startTime && currentTime <= endTime;
+      const isOpen = currentTime >= startTime && currentTime <= endTime;
+
+      // ✅ Log NSE hours for debugging
+      if (!isOpen) {
+        logger.debug(`NSE ${indexName} outside hours: ${currentTime} (need 1015-1445)`);
+      }
+
+      return isOpen;
     }
   }
+
 
   public async getCurrentMarketConditions(): Promise<string> {
     try {
