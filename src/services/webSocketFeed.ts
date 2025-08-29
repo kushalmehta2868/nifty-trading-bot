@@ -2,12 +2,12 @@ import WebSocket from 'ws';
 import { angelAPI } from './angelAPI';
 import { config } from '../config/config';
 import { logger } from '../utils/logger';
-import { 
-  MarketData, 
-  PriceData, 
-  PriceUpdate, 
-  PriceSubscriber, 
-  WebSocketMessage, 
+import {
+  MarketData,
+  PriceData,
+  PriceUpdate,
+  PriceSubscriber,
+  WebSocketMessage,
   SubscriptionMessage,
   IndexName
 } from '../types';
@@ -20,7 +20,9 @@ class WebSocketFeed {
   private subscribers: PriceSubscriber[] = [];
   private priceData: MarketData = {
     NIFTY: { prices: [], volumes: [], currentPrice: 0, currentVolume: 0, lastUpdate: 0 },
-    BANKNIFTY: { prices: [], volumes: [], currentPrice: 0, currentVolume: 0, lastUpdate: 0 }
+    BANKNIFTY: { prices: [], volumes: [], currentPrice: 0, currentVolume: 0, lastUpdate: 0 },
+    GOLD: { prices: [], volumes: [], currentPrice: 0, currentVolume: 0, lastUpdate: 0 },
+    SILVER: { prices: [], volumes: [], currentPrice: 0, currentVolume: 0, lastUpdate: 0 }
   };
   private pingInterval: NodeJS.Timeout | null = null;
   private pongTimeout: NodeJS.Timeout | null = null;
@@ -32,140 +34,197 @@ class WebSocketFeed {
 
   public async initialize(): Promise<boolean> {
     try {
-      logger.info('Initializing real-time Angel One WebSocket feed');
+      logger.info('Initializing Angel One data feed...');
 
       const authResult = await angelAPI.authenticate();
       if (!authResult) {
-        logger.error('Angel authentication failed - cannot proceed without real data');
-        throw new Error('Authentication required for real trading data');
+        throw new Error('Authentication failed');
       }
 
-      await this.connect();
-      return true;
+      await angelAPI.testTokenLTP(); // Verify tokens work via REST
+
+      // Try WebSocket first
+      try {
+        await this.connect();
+
+        // Wait 10 seconds to see if WebSocket delivers data
+        await new Promise(resolve => setTimeout(resolve, 10000));
+
+        let hasWebSocketData = false;
+        for (const indexName of ['NIFTY', 'BANKNIFTY', 'GOLD', 'SILVER'] as IndexName[]) {
+          if (this.getCurrentPrice(indexName) > 0) {
+            hasWebSocketData = true;
+            break;
+          }
+        }
+
+        if (hasWebSocketData) {
+          logger.info('✅ WebSocket data flowing - using WebSocket');
+          return true;
+        } else {
+          logger.warn('⚠️ WebSocket connected but no data - falling back to REST API');
+          this.startRESTFallback();
+          return true;
+        }
+
+      } catch (wsError) {
+        logger.warn('❌ WebSocket failed - using REST API fallback');
+        this.startRESTFallback();
+        return true;
+      }
 
     } catch (error) {
-      logger.error('WebSocket initialization failed:', (error as Error).message);
-      logger.error('CRITICAL: Cannot operate without real market data');
+      logger.error('Data feed initialization failed:', (error as Error).message);
       throw error;
     }
   }
+
 
   private async connect(): Promise<void> {
-    try {
-      // Fixed WebSocket URL format for Angel One API
-      const wsUrl = `wss://smartapisocket.angelone.in/smart-stream`;
-      
-      this.ws = new WebSocket(wsUrl, {
-        headers: {
-          'Authorization': `Bearer ${angelAPI.jwtToken}`,
-          'x-api-key': config.angel.apiKey,
-          'x-client-code': config.angel.clientId,
-          'x-feed-token': angelAPI.feedToken || ''
+    return new Promise((resolve, reject) => {
+      try {
+        // 🔥 CORRECTED WebSocket URL 
+        const wsUrl = `wss://smartapisocket.angelone.in/smart-stream`;
+
+        // 🔥 Validate authentication first
+        if (!angelAPI.jwtToken || !angelAPI.feedToken) {
+          throw new Error('Missing authentication tokens');
         }
-      });
 
-      this.ws.on('open', () => {
-        logger.info('🔗 WebSocket connected to Angel SmartAPI');
-        this.isConnected = true;
-        this.reconnectAttempts = 0;
-        this.lastPongReceived = Date.now();
-        this.startPingPong();
-        this.startHealthCheck();
-        this.subscribe();
-      });
+        logger.info('🔗 Connecting to Angel WebSocket...');
+        logger.info(`JWT: ${angelAPI.jwtToken?.substring(0, 20)}...`);
+        logger.info(`Feed: ${angelAPI.feedToken?.substring(0, 20)}...`);
 
-      this.ws.on('message', (data: WebSocket.Data) => {
-        this.handleMessage(data);
-      });
+        this.ws = new WebSocket(wsUrl, {
+          headers: {
+            'Authorization': `Bearer ${angelAPI.jwtToken}`,
+            'x-api-key': config.angel.apiKey,
+            'x-client-code': config.angel.clientId,
+            'x-feed-token': angelAPI.feedToken
+          }
+        });
 
-      this.ws.on('ping', () => {
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-          this.ws.pong();
-          logger.debug('WebSocket ping received, sent pong');
-        }
-      });
+        // 🔥 Connection timeout
+        const timeout = setTimeout(() => {
+          reject(new Error('WebSocket connection timeout'));
+        }, 15000);
 
-      this.ws.on('pong', () => {
-        this.lastPongReceived = Date.now();
-        logger.debug('WebSocket pong received');
-        if (this.pongTimeout) {
-          clearTimeout(this.pongTimeout);
-          this.pongTimeout = null;
-        }
-      });
+        this.ws.on('open', () => {
+          clearTimeout(timeout);
+          logger.info('🔗 WebSocket connected successfully');
+          this.isConnected = true;
+          this.reconnectAttempts = 0;
+          this.lastPongReceived = Date.now();
 
-      this.ws.on('close', (code: number, reason: Buffer) => {
-        logger.warn(`WebSocket closed: ${code} ${reason.toString()}`);
-        this.isConnected = false;
-        this.stopPingPong();
-        this.stopHealthCheck();
-        this.scheduleReconnect();
-      });
+          // 🔥 Wait before subscribing
+          setTimeout(() => {
+            this.subscribe();
+          }, 2000);
 
-      this.ws.on('error', (error: Error) => {
-        logger.error('WebSocket error:', error.message);
-        this.isConnected = false;
-        
-        if (error.message.includes('401') || error.message.includes('403')) {
-          logger.error('CRITICAL: Authentication failed for WebSocket - cannot proceed without real data');
-          throw new Error('WebSocket authentication failed');
-        }
-      });
+          resolve();
+        });
 
-    } catch (error) {
-      logger.error('WebSocket connection failed:', (error as Error).message);
-      throw error;
-    }
+        this.ws.on('error', (error: Error) => {
+          clearTimeout(timeout);
+          logger.error('❌ WebSocket error:', error.message);
+          this.isConnected = false;
+          reject(error);
+        });
+
+        // 🔥 Enhanced message handler
+        this.ws.on('message', (data: WebSocket.Data) => {
+          logger.info('📨 RAW WebSocket data:', data.toString());
+          this.handleMessage(data);
+        });
+
+      } catch (error) {
+        reject(error);
+      }
+    });
   }
 
+
   private subscribe(): void {
-    const subscribeMsg: SubscriptionMessage = {
-      action: 1, // Subscribe
-      mode: 3,   // Full mode (includes LTP, volume, OI, etc.)
-      tokenList: [
-        {
-          exchangeType: 1,
-          tokens: [config.indices.NIFTY.token, config.indices.BANKNIFTY.token]
-        }
-      ]
+    const subscribeMsg = {
+      correlationID: 'tradingbot_' + Date.now(),
+      action: 1,
+      mode: 1, // 🔥 Try mode 1 instead of mode 3 for basic LTP
+      exchangeType: 1, // 🔥 Single exchange per message
+      tokens: [config.indices.NIFTY.token, config.indices.BANKNIFTY.token]
     };
 
     if (this.isConnected && this.ws && this.ws.readyState === WebSocket.OPEN) {
+      logger.info('📡 Sending NSE subscription...');
       this.ws.send(JSON.stringify(subscribeMsg));
-      logger.info('📡 Subscribed to NIFTY & Bank NIFTY live feeds with full market data (including volume)');
+
+      // 🔥 Send separate message for MCX
+      setTimeout(() => {
+        const mcxMsg = {
+          correlationID: 'mcx_' + Date.now(),
+          action: 1,
+          mode: 1,
+          exchangeType: 5, // MCX
+          tokens: [config.indices.GOLD.token, config.indices.SILVER.token]
+        };
+        logger.info('📡 Sending MCX subscription...');
+        this.ws!.send(JSON.stringify(mcxMsg));
+      }, 1000);
     }
   }
+
 
   private handleMessage(data: WebSocket.Data): void {
     try {
-      const message: WebSocketMessage = JSON.parse(data.toString());
+      let rawMessage = data.toString();
 
-      if (message.token && message.ltp) {
-        let indexName: IndexName | null = null;
-
-        if (message.token === config.indices.NIFTY.token) {
-          indexName = 'NIFTY';
-        } else if (message.token === config.indices.BANKNIFTY.token) {
-          indexName = 'BANKNIFTY';
-        }
-
-        if (indexName) {
-          const price = typeof message.ltp === 'string' ? 
-            parseFloat(message.ltp) : message.ltp;
-          
-          // Extract volume from WebSocket message if available
-          const volume = message.volume ? 
-            (typeof message.volume === 'string' ? parseFloat(message.volume) : message.volume) : 
-            0;
-            
-          this.updatePrice(indexName, price, volume);
-        }
+      // 🔥 Check if it's binary data
+      if (data instanceof Buffer) {
+        logger.info('📨 Binary data received, converting...');
+        // For Angel One binary format, try converting to hex first
+        rawMessage = data.toString('hex');
+        logger.info('📨 Hex data:', rawMessage.substring(0, 100) + '...');
+        return; // Skip binary parsing for now
       }
 
+      logger.info('📨 Raw message:', rawMessage);
+
+      if (rawMessage.startsWith('{')) {
+        const message = JSON.parse(rawMessage);
+        logger.info('🔍 Parsed JSON:', JSON.stringify(message, null, 2));
+
+        // 🔥 Check for different message types Angel One sends
+        if (message.tk && message.lp) {
+          // Format 1: tk=token, lp=last price
+          this.processTickData(message.tk, message.lp, message.v || 0);
+        } else if (message.token && message.ltp) {
+          // Format 2: token, ltp
+          this.processTickData(message.token, message.ltp, message.volume || 0);
+        } else {
+          logger.info('📝 Other message type:', message);
+        }
+      }
     } catch (error) {
-      logger.error('Error parsing WebSocket message:', (error as Error).message);
+      logger.error('❌ Message parsing failed:', (error as Error).message);
     }
   }
+
+  private processTickData(token: string, price: number, volume: number): void {
+    let indexName: IndexName | null = null;
+
+    if (token === config.indices.NIFTY.token) indexName = 'NIFTY';
+    else if (token === config.indices.BANKNIFTY.token) indexName = 'BANKNIFTY';
+    else if (token === config.indices.GOLD.token) indexName = 'GOLD';
+    else if (token === config.indices.SILVER.token) indexName = 'SILVER';
+
+    if (indexName) {
+      logger.info(`🎉 TICK: ${indexName} = ₹${price}`);
+      this.updatePrice(indexName, price, volume);
+    } else {
+      logger.warn(`❓ Unknown token: ${token}`);
+    }
+  }
+
+
 
   private updatePrice(indexName: IndexName, price: number, volume: number = 0): void {
     const priceData: PriceData = this.priceData[indexName];
@@ -252,7 +311,7 @@ class WebSocketFeed {
 
   private startHealthCheck(): void {
     this.stopHealthCheck(); // Clear any existing intervals
-    
+
     this.healthCheckInterval = setInterval(() => {
       if (!this.isConnectionHealthy()) {
         logger.warn('WebSocket connection unhealthy - forcing reconnection');
@@ -261,7 +320,7 @@ class WebSocketFeed {
         }
       }
     }, 60000); // Check every minute
-    
+
     logger.debug('WebSocket health monitoring started');
   }
 
@@ -270,18 +329,18 @@ class WebSocketFeed {
       clearInterval(this.healthCheckInterval);
       this.healthCheckInterval = null;
     }
-    
+
     logger.debug('WebSocket health monitoring stopped');
   }
 
   private startPingPong(): void {
     this.stopPingPong(); // Clear any existing intervals
-    
+
     this.pingInterval = setInterval(() => {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
         this.ws.ping();
         logger.debug('WebSocket ping sent');
-        
+
         // Set timeout for pong response
         this.pongTimeout = setTimeout(() => {
           logger.warn('WebSocket pong timeout - connection may be dead');
@@ -291,8 +350,8 @@ class WebSocketFeed {
         }, this.PONG_TIMEOUT);
       }
     }, this.PING_INTERVAL);
-    
-    logger.info(`📡 WebSocket heartbeat started (ping every ${this.PING_INTERVAL/1000}s)`);
+
+    logger.info(`📡 WebSocket heartbeat started (ping every ${this.PING_INTERVAL / 1000}s)`);
   }
 
   private stopPingPong(): void {
@@ -300,12 +359,12 @@ class WebSocketFeed {
       clearInterval(this.pingInterval);
       this.pingInterval = null;
     }
-    
+
     if (this.pongTimeout) {
       clearTimeout(this.pongTimeout);
       this.pongTimeout = null;
     }
-    
+
     logger.debug('WebSocket heartbeat stopped');
   }
 
@@ -325,20 +384,65 @@ class WebSocketFeed {
   public disconnect(): void {
     this.stopPingPong();
     this.stopHealthCheck();
-    
+
     // Clear reconnect timeout
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);
       this.reconnectTimeout = null;
     }
-    
+
     if (this.ws) {
       this.ws.close();
       this.ws = null;
     }
-    
+
     this.isConnected = false;
   }
+
+
+  // Add this to your webSocketFeed.ts as a fallback
+  private restPollingInterval: NodeJS.Timeout | null = null;
+
+  public startRESTFallback(): void {
+    logger.info('🔄 Starting REST API fallback (WebSocket data unavailable)');
+
+    this.restPollingInterval = setInterval(async () => {
+      try {
+        // Poll all instruments via REST API
+        for (const indexName of ['NIFTY', 'BANKNIFTY', 'GOLD', 'SILVER'] as IndexName[]) {
+          const response = await angelAPI.makeRequest(
+            '/rest/secure/angelbroking/market/v1/quote/',
+            'POST',
+            {
+              mode: 'LTP',
+              exchangeTokens: {
+                [indexName === 'GOLD' || indexName === 'SILVER' ? 'MCX' : 'NSE']: [config.indices[indexName].token]
+              }
+            }
+          );
+
+          if (response?.data?.fetched && response.data.fetched.length > 0) {
+            const price = parseFloat(response.data.fetched[0].ltp);
+            const volume = parseFloat(response.data.fetched[0].volume || '0');
+
+            logger.debug(`📊 REST: ${indexName} = ₹${price}`);
+            this.updatePrice(indexName, price, volume);
+          }
+        }
+      } catch (error) {
+        logger.error('REST polling failed:', (error as Error).message);
+      }
+    }, 3000); // Poll every 3 seconds - reasonable for trading
+  }
+
+  public stopRESTFallback(): void {
+    if (this.restPollingInterval) {
+      clearInterval(this.restPollingInterval);
+      this.restPollingInterval = null;
+      logger.info('🔄 REST API fallback stopped');
+    }
+  }
+
 }
 
 export const webSocketFeed = new WebSocketFeed();

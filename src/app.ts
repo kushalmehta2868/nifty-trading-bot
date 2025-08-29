@@ -5,7 +5,7 @@ import { orderService } from './services/orderService';
 import { healthServer } from './services/healthServer';
 import { logger } from './utils/logger';
 import { config } from './config/config';
-import { isMarketOpen, getTimeUntilMarketOpen, formatTimeUntilMarketOpen } from './utils/marketHours';
+import { isMarketOpen, getTimeUntilMarketOpen, formatTimeUntilMarketOpen, getMarketStatus } from './utils/marketHours';
 import { TradingSignal, TradingStats } from './types';
 
 class WebSocketTradingBot {
@@ -23,9 +23,8 @@ class WebSocketTradingBot {
   public async start(): Promise<void> {
     try {
       logger.info('🚀 WebSocket Trading Bot Starting...');
-      logger.info(`Data Source: ${config.trading.useMockData ? 'Mock' : 'Live'} WebSocket`);
 
-      // Start health server first (for Render keep-alive)
+      // Start health server first
       healthServer.start();
 
       // Check market hours
@@ -38,42 +37,35 @@ class WebSocketTradingBot {
         return;
       }
 
-      // Initialize all services
+      // ✅ CORRECT INITIALIZATION ORDER:
+
+      // 1. Initialize WebSocket FIRST
       await webSocketFeed.initialize();
+      logger.info('✅ WebSocket initialized');
+
+      // 2. Wait for WebSocket to actually connect
+      await new Promise(resolve => setTimeout(resolve, 3000));
+
+      // 3. Initialize strategy AFTER WebSocket is ready
       await strategy.initialize();
+      logger.info('✅ Strategy initialized');
+
+      // 4. Initialize other services
       await telegramBot.initialize();
       await orderService.initialize();
 
-      // Track signals for stats
-      (process as any).on('tradingSignal', (signal: TradingSignal) => {
-        this.stats.signals++;
-        this.stats.avgConfidence = this.stats.avgConfidence ? 
-          (this.stats.avgConfidence * (this.stats.signals - 1) + signal.confidence) / this.stats.signals :
-          signal.confidence;
-      });
-
-      // Send startup notification
+      // 5. Send startup notification
       await telegramBot.sendStartupMessage();
 
-      // Schedule daily summary
-      this.scheduleDailySummary();
-      
-      // Schedule market close check
-      this.scheduleMarketClose();
-
       this.isRunning = true;
-      logger.info('✅ WebSocket Trading Bot Running - Monitoring Live Market');
-      logger.info('🎯 Waiting for breakout signals...');
-      logger.info('🔴 BOT STATUS: ACTIVE AND MONITORING FOR BREAKOUT SIGNALS');
-      
-      // Start heartbeat logger
-      this.startHeartbeat();
+      logger.info('✅ All services initialized successfully');
 
     } catch (error) {
-      logger.error('Failed to start WebSocket trading bot:', (error as Error).message);
+      logger.error('Failed to start trading bot:', (error as Error).message);
       process.exit(1);
     }
   }
+
 
   private scheduleDailySummary(): void {
     const now = new Date();
@@ -86,11 +78,11 @@ class WebSocketTradingBot {
     this.dailySummaryTimeout = setTimeout(async () => {
       // Send trading summary
       await telegramBot.sendDailySummary(this.stats);
-      
+
       // Send balance summary
       const balanceSummary = await orderService.getDailyBalanceSummary();
       await telegramBot.sendMessage(balanceSummary);
-      
+
       // Reset daily stats
       this.stats = { signals: 0, successful: 0, avgConfidence: 0 };
       orderService.resetDailyStats();
@@ -102,22 +94,22 @@ class WebSocketTradingBot {
 
   private scheduleMarketOpen(): void {
     const timeUntilOpen = getTimeUntilMarketOpen();
-    
+
     logger.info(`⏰ Scheduling bot activation in ${Math.floor(timeUntilOpen / (1000 * 60 * 60))}h ${Math.floor((timeUntilOpen % (1000 * 60 * 60)) / (1000 * 60))}m`);
-    
+
     this.marketOpenTimeout = setTimeout(async () => {
       logger.info('🔔 Market opening - Activating trading bot');
       await telegramBot.sendMessage('🔔 Market is now open - Bot is activating!');
-      
+
       // Initialize trading services
       await webSocketFeed.initialize();
       await strategy.initialize();
       await orderService.initialize();
-      
+
       this.isRunning = true;
       this.scheduleMarketClose();
       this.startHeartbeat();
-      
+
       logger.info('✅ Trading bot activated for market hours');
     }, timeUntilOpen);
   }
@@ -128,12 +120,12 @@ class WebSocketTradingBot {
       if (!isMarketOpen() && this.isRunning) {
         logger.info('🔔 Market closed - Deactivating trading bot');
         telegramBot.sendMessage('🔔 Market closed - Bot deactivated until next trading session');
-        
+
         // Disconnect trading services but keep bot running
         webSocketFeed.disconnect();
         this.isRunning = false;
         this.stopHeartbeat();
-        
+
         // Schedule next market open
         this.scheduleMarketOpen();
       } else if (isMarketOpen()) {
@@ -141,7 +133,7 @@ class WebSocketTradingBot {
         setTimeout(checkMarketStatus, 60 * 60 * 1000);
       }
     };
-    
+
     // Initial check in 1 hour
     setTimeout(checkMarketStatus, 60 * 60 * 1000);
   }
@@ -185,18 +177,27 @@ class WebSocketTradingBot {
   }
 
   private startHeartbeat(): void {
-    // Clear existing heartbeat if any
     this.stopHeartbeat();
-    
     this.heartbeatInterval = setInterval(async () => {
       if (this.isRunning && isMarketOpen()) {
         const uptime = Math.floor((Date.now() - this.startTime) / 1000);
         const uptimeMinutes = Math.floor(uptime / 60);
         const uptimeHours = Math.floor(uptimeMinutes / 60);
         const displayMinutes = uptimeMinutes % 60;
-        
-        logger.info(`💚 BOT WORKING - Runtime: ${uptimeHours}h ${displayMinutes}m | Market: OPEN | Signals: ${this.stats.signals} | Status: MONITORING CE/PE CONDITIONS`);
-        
+
+        // Get market status
+        const marketStatus = getMarketStatus();
+        let marketInfo = '';
+        if (marketStatus.nse && marketStatus.mcx) {
+          marketInfo = 'NSE+MCX: OPEN';
+        } else if (marketStatus.nse) {
+          marketInfo = 'NSE: OPEN, MCX: OPEN';
+        } else if (marketStatus.mcx) {
+          marketInfo = 'NSE: CLOSED, MCX: OPEN';
+        }
+
+        logger.info(`💚 BOT WORKING - Runtime: ${uptimeHours}h ${displayMinutes}m | ${marketInfo} | Signals: ${this.stats.signals} | Status: MONITORING ALL CONDITIONS`);
+
         // Show current market conditions
         try {
           const marketConditions = await strategy.getCurrentMarketConditions();
@@ -208,8 +209,6 @@ class WebSocketTradingBot {
         logger.info(`💛 BOT WORKING - Market: CLOSED | Status: WAITING FOR MARKET OPEN`);
       }
     }, 10000); // Every 10 seconds
-    
-    logger.debug('⏰ Heartbeat logger started (every 10 seconds)');
   }
 
   private stopHeartbeat(): void {

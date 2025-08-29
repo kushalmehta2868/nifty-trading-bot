@@ -304,7 +304,6 @@ class AngelAPI {
     }
   }
 
-  // Get option symbol token (required for price fetching)
   public async getOptionToken(
     indexName: string,
     strike: number,
@@ -313,8 +312,9 @@ class AngelAPI {
   ): Promise<string | null> {
     try {
       const symbol = `${indexName}${expiry}${strike}${optionType}`;
-      const response = await this.searchScrips('NFO', symbol);
+      const exchange = (indexName === 'GOLD' || indexName === 'SILVER') ? 'MCX' : 'NFO';
 
+      const response = await this.searchScrips(exchange, symbol);
       if (response && response.data && response.data.length > 0) {
         return response.data[0].symboltoken;
       }
@@ -326,6 +326,7 @@ class AngelAPI {
       return null;
     }
   }
+
 
   // Get order status and details
   public async getOrderStatus(orderId: string): Promise<any> {
@@ -385,13 +386,13 @@ class AngelAPI {
   public async getAvailableMargin(): Promise<number> {
     try {
       const fundsResponse = await this.getFunds();
-      
+
       if (fundsResponse?.data?.availablecash) {
         const availableMargin = parseFloat(fundsResponse.data.availablecash);
         logger.info(`💰 Available trading margin: ₹${availableMargin.toFixed(2)}`);
         return availableMargin;
       }
-      
+
       logger.warn('Could not retrieve available margin from funds response');
       return 0;
     } catch (error) {
@@ -500,23 +501,25 @@ class AngelAPI {
 
   // Get volume data for index
   public async getVolumeData(
-    indexName: 'NIFTY' | 'BANKNIFTY'
+    indexName: 'NIFTY' | 'BANKNIFTY' | 'GOLD' | 'SILVER'
   ): Promise<{ volume: number; avgVolume: number } | null> {
     try {
       const tokenMap = {
         'NIFTY': config.indices.NIFTY.token,
-        'BANKNIFTY': config.indices.BANKNIFTY.token
+        'BANKNIFTY': config.indices.BANKNIFTY.token,
+        'GOLD': config.indices.GOLD.token,
+        'SILVER': config.indices.SILVER.token
       };
 
       const quote = await this.getQuote('NSE', indexName, tokenMap[indexName]);
-      
+
       if (quote?.data) {
         const currentVolume = parseFloat(quote.data.volume || '0');
-        
+
         // Get historical data for average volume calculation (last 20 days)
         const toDate = new Date().toISOString().split('T')[0];
         const fromDate = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-        
+
         const candleData = await this.getCandleData(
           'NSE',
           tokenMap[indexName],
@@ -544,6 +547,186 @@ class AngelAPI {
       return null;
     }
   }
+
+
+  public async debugTokens(): Promise<void> {
+    logger.info('🔍 Debug Token Information:');
+    logger.info(`JWT Token: ${this._jwtToken ? this._jwtToken.substring(0, 20) + '...' : 'NULL'}`);
+    logger.info(`Feed Token: ${this._feedToken ? this._feedToken.substring(0, 20) + '...' : 'NULL'}`);
+    logger.info(`Authentication Status: ${this.isAuthenticated}`);
+
+    // Test with a simple profile call
+    try {
+      const profile = await this.getProfile();
+      logger.info('✅ API authentication working - profile retrieved');
+    } catch (error) {
+      logger.error('❌ API authentication failed:', (error as Error).message);
+    }
+  }
+
+  public async findMCXTokens(): Promise<void> {
+    try {
+      logger.info('🔍 Searching for MCX tokens...');
+
+      // Try to get master data first (most reliable)
+      try {
+        await this.getMasterData();
+        return; // If successful, don't need to search
+      } catch (error) {
+        logger.warn('Master data fetch failed, trying search method...');
+      }
+
+      // Fallback to search method
+      try {
+        const goldSearch = await this.searchScrips('MCX', 'GOLD');
+        logger.info('🥇 Gold search results:', goldSearch?.data?.slice(0, 3) || 'No results');
+      } catch (error) {
+        logger.warn('MCX Gold search failed:', (error as Error).message);
+      }
+
+      try {
+        const silverSearch = await this.searchScrips('MCX', 'SILVER');
+        logger.info('🥈 Silver search results:', silverSearch?.data?.slice(0, 3) || 'No results');
+      } catch (error) {
+        logger.warn('MCX Silver search failed:', (error as Error).message);
+      }
+
+      logger.info('✅ MCX token search completed (some searches may have failed)');
+
+    } catch (error) {
+      logger.error('MCX token search failed:', (error as Error).message);
+      logger.info('🔄 Continuing with existing MCX tokens from config...');
+    }
+  }
+
+
+
+  // Add this method to your AngelAPI class
+  public async getMasterData(): Promise<void> {
+    try {
+      logger.info('🔍 Fetching Angel One master data for tokens...');
+
+      const response = await axios.get('https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json');
+      const masterData = response.data;
+
+      // Filter MCX instruments
+      const mcxInstruments = masterData.filter((item: any) => item.exch_seg === 'MCX');
+
+      // Find Gold contracts
+      const goldContracts = mcxInstruments.filter((item: any) =>
+        item.name && (item.name.includes('GOLD') || item.symbol?.includes('GOLD'))
+      );
+
+      // Find Silver contracts  
+      const silverContracts = mcxInstruments.filter((item: any) =>
+        item.name && (item.name.includes('SILVER') || item.symbol?.includes('SILVER'))
+      );
+
+      logger.info('🥇 MCX Gold contracts found:');
+      goldContracts.slice(0, 5).forEach((contract: any) => {
+        logger.info(`  ${contract.symbol} | Token: ${contract.token} | Name: ${contract.name}`);
+      });
+
+      logger.info('🥈 MCX Silver contracts found:');
+      silverContracts.slice(0, 5).forEach((contract: any) => {
+        logger.info(`  ${contract.symbol} | Token: ${contract.token} | Name: ${contract.name}`);
+      });
+
+    } catch (error) {
+      logger.error('Failed to fetch master data:', (error as Error).message);
+    }
+  }
+
+  public async testTokenLTP(): Promise<void> {
+    const tokens = [
+      { name: 'NIFTY', token: config.indices.NIFTY.token, exchange: 'NSE' },
+      { name: 'BANKNIFTY', token: config.indices.BANKNIFTY.token, exchange: 'NSE' },
+      { name: 'GOLD', token: config.indices.GOLD.token, exchange: 'MCX' },
+      { name: 'SILVER', token: config.indices.SILVER.token, exchange: 'MCX' }
+    ];
+
+    for (const item of tokens) {
+      try {
+        // ✅ CORRECT API endpoint and format
+        const response = await this.makeRequest(
+          '/rest/secure/angelbroking/market/v1/quote/',
+          'POST',
+          {
+            mode: 'LTP',
+            exchangeTokens: {
+              [item.exchange]: [item.token]
+            }
+          }
+        );
+
+        if (response?.data?.fetched && response.data.fetched.length > 0) {
+          const ltp = response.data.fetched[0].ltp;
+          logger.info(`✅ ${item.name}: ₹${ltp} (Token: ${item.token})`);
+        } else if (response?.data?.unfetched && response.data.unfetched.length > 0) {
+          logger.warn(`❌ ${item.name}: ${response.data.unfetched[0].message} (Token: ${item.token})`);
+        } else {
+          logger.warn(`❌ ${item.name}: No data returned (Token: ${item.token})`);
+          logger.warn(`   Response:`, JSON.stringify(response, null, 2));
+        }
+      } catch (error) {
+        logger.error(`❌ ${item.name} LTP failed:`, (error as Error).message);
+      }
+    }
+  }
+
+
+
+  public async getMasterTokens(): Promise<void> {
+    try {
+      logger.info('📋 Fetching Angel One master contract file...');
+
+      const response = await axios.get('https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json');
+      const masterData = response.data;
+
+      // Find NIFTY tokens
+      const niftyContracts = masterData.filter((item: any) =>
+        item.name && item.name.includes('NIFTY') && item.exch_seg === 'NSE' && item.symbol === 'NIFTY 50'
+      );
+
+      const bankniftyContracts = masterData.filter((item: any) =>
+        item.name && item.name.includes('NIFTY') && item.exch_seg === 'NSE' && item.symbol === 'NIFTY BANK'
+      );
+
+      // Find MCX Gold contracts
+      const goldContracts = masterData.filter((item: any) =>
+        item.exch_seg === 'MCX' && item.name && item.name.includes('GOLD') && !item.name.includes('MINI')
+      );
+
+      // Find MCX Silver contracts  
+      const silverContracts = masterData.filter((item: any) =>
+        item.exch_seg === 'MCX' && item.name && item.name.includes('SILVER') && !item.name.includes('MINI')
+      );
+
+      logger.info('🔍 Found contracts:');
+
+      if (niftyContracts.length > 0) {
+        logger.info(`📈 NIFTY: Token=${niftyContracts[0].token}, Symbol=${niftyContracts[0].symbol}`);
+      }
+
+      if (bankniftyContracts.length > 0) {
+        logger.info(`📈 BANKNIFTY: Token=${bankniftyContracts[0].token}, Symbol=${bankniftyContracts[0].symbol}`);
+      }
+
+      if (goldContracts.length > 0) {
+        logger.info(`🥇 GOLD Options found:`, goldContracts.slice(0, 3).map((c: any) => `${c.symbol} (${c.token})`));
+      }
+
+      if (silverContracts.length > 0) {
+        logger.info(`🥈 SILVER Options found:`, silverContracts.slice(0, 3).map((c: any) => `${c.symbol} (${c.token})`));
+      }
+
+    } catch (error) {
+      logger.error('Failed to fetch master tokens:', (error as Error).message);
+    }
+  }
+
+
+
 }
 
 export const angelAPI = new AngelAPI();

@@ -32,15 +32,31 @@ export const config: Config = {
   indices: {
     NIFTY: {
       name: 'NIFTY 50',
-      token: '99926000',
+      token: '99926000', // ✅ Try this NSE NIFTY token
       lotSize: 75,
-      basePrice: 24800
+      basePrice: 24800,
+      symbol: 'NIFTY 50'
     },
     BANKNIFTY: {
       name: 'NIFTY BANK',
-      token: '99926037',
+      token: '99926009', // ✅ Try this NSE BANK NIFTY token
       lotSize: 35,
-      basePrice: 55000
+      basePrice: 55000,
+      symbol: 'NIFTY BANK'
+    },
+    GOLD: {
+      name: 'GOLD',
+      token: '99920003', // ✅ Will get from master file
+      lotSize: 1,
+      basePrice: 62000,
+      symbol: 'MCXGOLDEX'
+    },
+    SILVER: {
+      name: 'SILVER',
+      token: '445004', // ✅ Will get from master file
+      lotSize: 30,
+      basePrice: 77000,
+      symbol: 'SILVER05DEC25FUT'
     }
   }
 };

@@ -33,6 +33,7 @@ export interface IndexConfig {
   token: string;
   lotSize: number;
   basePrice: number;
+  symbol?: string;
 }
 
 export interface Config {
@@ -43,6 +44,8 @@ export interface Config {
   indices: {
     NIFTY: IndexConfig;
     BANKNIFTY: IndexConfig;
+    GOLD: IndexConfig;
+    SILVER: IndexConfig;
   };
 }
 
@@ -88,7 +91,7 @@ export interface TechnicalIndicators {
 }
 
 export interface TradingSignal {
-  indexName: 'NIFTY' | 'BANKNIFTY';
+  indexName: 'NIFTY' | 'BANKNIFTY' | 'GOLD' | 'SILVER';
   direction: 'UP' | 'DOWN';
   optionSymbol: string;
   optionType?: 'CE' | 'PE';
@@ -119,6 +122,8 @@ export interface PriceData {
 export interface MarketData {
   NIFTY: PriceData;
   BANKNIFTY: PriceData;
+  GOLD: PriceData;
+  SILVER: PriceData;
 }
 
 // WebSocket Types
@@ -178,6 +183,6 @@ export type PriceSubscriber = (indexName: string, priceUpdate: PriceUpdate) => v
 export type SignalHandler = (signal: TradingSignal) => void;
 
 // Utility Types
-export type IndexName = 'NIFTY' | 'BANKNIFTY';
+export type IndexName = 'NIFTY' | 'BANKNIFTY' | 'GOLD' | 'SILVER';
 export type Direction = 'UP' | 'DOWN';
 export type OptionType = 'CE' | 'PE';
