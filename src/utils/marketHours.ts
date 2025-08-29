@@ -50,11 +50,8 @@ export function isMarketOpen(date: Date = new Date()): boolean {
 }
 
 function getISTDate(date: Date = new Date()): Date {
-  // Create a new date object in IST timezone
-  // This works regardless of server timezone
-  const utcDate = new Date(date.toISOString());
-  const istOffset = 5.5 * 60 * 60 * 1000; // IST is UTC+5:30
-  return new Date(utcDate.getTime() + istOffset);
+  // Use proper timezone conversion
+  return new Date(date.toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
 }
 
 export function getNextMarketOpen(date: Date = new Date()): Date {
@@ -128,6 +125,9 @@ export function getTimezoneInfo(): {
   serverTimezone: string;
   istTime: string;
   marketOpen: boolean;
+  currentHour: number;
+  currentMinute: number;
+  dayOfWeek: number;
 } {
   const now = new Date();
   const istDate = getISTDate(now);
@@ -135,7 +135,10 @@ export function getTimezoneInfo(): {
   return {
     serverTime: now.toISOString(),
     serverTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    istTime: istDate.toISOString().replace('Z', '+05:30'),
-    marketOpen: isMarketOpen(now)
+    istTime: now.toLocaleString("en-US", {timeZone: "Asia/Kolkata"}),
+    marketOpen: isMarketOpen(now),
+    currentHour: istDate.getHours(),
+    currentMinute: istDate.getMinutes(),
+    dayOfWeek: istDate.getDay()
   };
 }

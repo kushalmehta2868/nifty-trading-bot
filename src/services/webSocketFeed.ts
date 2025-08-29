@@ -22,6 +22,13 @@ class WebSocketFeed {
     NIFTY: { prices: [], currentPrice: 0, lastUpdate: 0 },
     BANKNIFTY: { prices: [], currentPrice: 0, lastUpdate: 0 }
   };
+  private pingInterval: NodeJS.Timeout | null = null;
+  private pongTimeout: NodeJS.Timeout | null = null;
+  private lastPongReceived: number = Date.now();
+  private readonly PING_INTERVAL = 30000; // 30 seconds
+  private readonly PONG_TIMEOUT = 10000; // 10 seconds
+  private healthCheckInterval: NodeJS.Timeout | null = null;
+  private reconnectTimeout: NodeJS.Timeout | null = null;
 
   public async initialize(): Promise<boolean> {
     try {
@@ -61,6 +68,9 @@ class WebSocketFeed {
         logger.info('🔗 WebSocket connected to Angel SmartAPI');
         this.isConnected = true;
         this.reconnectAttempts = 0;
+        this.lastPongReceived = Date.now();
+        this.startPingPong();
+        this.startHealthCheck();
         this.subscribe();
       });
 
@@ -68,9 +78,27 @@ class WebSocketFeed {
         this.handleMessage(data);
       });
 
+      this.ws.on('ping', () => {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+          this.ws.pong();
+          logger.debug('WebSocket ping received, sent pong');
+        }
+      });
+
+      this.ws.on('pong', () => {
+        this.lastPongReceived = Date.now();
+        logger.debug('WebSocket pong received');
+        if (this.pongTimeout) {
+          clearTimeout(this.pongTimeout);
+          this.pongTimeout = null;
+        }
+      });
+
       this.ws.on('close', (code: number, reason: Buffer) => {
         logger.warn(`WebSocket closed: ${code} ${reason.toString()}`);
         this.isConnected = false;
+        this.stopPingPong();
+        this.stopHealthCheck();
         this.scheduleReconnect();
       });
 
@@ -179,6 +207,12 @@ class WebSocketFeed {
   }
 
   private scheduleReconnect(): void {
+    // Clear existing reconnect timeout
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       logger.error('CRITICAL: Max reconnection attempts reached - cannot proceed without real market data');
       throw new Error('WebSocket connection permanently failed');
@@ -187,20 +221,101 @@ class WebSocketFeed {
     const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
     this.reconnectAttempts++;
 
-    setTimeout(() => {
+    this.reconnectTimeout = setTimeout(() => {
       logger.info(`🔄 Reconnecting WebSocket (attempt ${this.reconnectAttempts})...`);
       this.connect().catch(error => {
         logger.error('Reconnection failed:', error.message);
+        this.scheduleReconnect();
       });
     }, delay);
   }
 
+  private startHealthCheck(): void {
+    this.stopHealthCheck(); // Clear any existing intervals
+    
+    this.healthCheckInterval = setInterval(() => {
+      if (!this.isConnectionHealthy()) {
+        logger.warn('WebSocket connection unhealthy - forcing reconnection');
+        if (this.ws) {
+          this.ws.terminate();
+        }
+      }
+    }, 60000); // Check every minute
+    
+    logger.debug('WebSocket health monitoring started');
+  }
+
+  private stopHealthCheck(): void {
+    if (this.healthCheckInterval) {
+      clearInterval(this.healthCheckInterval);
+      this.healthCheckInterval = null;
+    }
+    
+    logger.debug('WebSocket health monitoring stopped');
+  }
+
+  private startPingPong(): void {
+    this.stopPingPong(); // Clear any existing intervals
+    
+    this.pingInterval = setInterval(() => {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.ping();
+        logger.debug('WebSocket ping sent');
+        
+        // Set timeout for pong response
+        this.pongTimeout = setTimeout(() => {
+          logger.warn('WebSocket pong timeout - connection may be dead');
+          if (this.ws) {
+            this.ws.terminate();
+          }
+        }, this.PONG_TIMEOUT);
+      }
+    }, this.PING_INTERVAL);
+    
+    logger.info(`📡 WebSocket heartbeat started (ping every ${this.PING_INTERVAL/1000}s)`);
+  }
+
+  private stopPingPong(): void {
+    if (this.pingInterval) {
+      clearInterval(this.pingInterval);
+      this.pingInterval = null;
+    }
+    
+    if (this.pongTimeout) {
+      clearTimeout(this.pongTimeout);
+      this.pongTimeout = null;
+    }
+    
+    logger.debug('WebSocket heartbeat stopped');
+  }
+
+  public isConnectionHealthy(): boolean {
+    const timeSinceLastPong = Date.now() - this.lastPongReceived;
+    return this.isConnected && timeSinceLastPong < this.PING_INTERVAL * 2;
+  }
+
+  public getConnectionStatus(): { connected: boolean; healthy: boolean; lastPong: number } {
+    return {
+      connected: this.isConnected,
+      healthy: this.isConnectionHealthy(),
+      lastPong: this.lastPongReceived
+    };
+  }
+
   public disconnect(): void {
+    this.stopPingPong();
+    this.stopHealthCheck();
+    
+    // Clear reconnect timeout
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+    
     if (this.ws) {
       this.ws.close();
       this.ws = null;
     }
-    
     
     this.isConnected = false;
   }

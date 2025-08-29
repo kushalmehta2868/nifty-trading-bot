@@ -19,4 +19,7 @@ export declare function getTimezoneInfo(): {
     serverTimezone: string;
     istTime: string;
     marketOpen: boolean;
+    currentHour: number;
+    currentMinute: number;
+    dayOfWeek: number;
 };

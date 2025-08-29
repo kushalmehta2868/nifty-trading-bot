@@ -1,6 +1,7 @@
 import express from 'express';
 import { logger } from '../utils/logger';
 import { isMarketOpen, formatTimeUntilMarketOpen, getTimezoneInfo } from '../utils/marketHours';
+import { webSocketFeed } from './webSocketFeed';
 
 class HealthServer {
   private app: express.Application;
@@ -27,8 +28,10 @@ class HealthServer {
     this.app.get('/health', (req, res) => {
       const marketStatus = isMarketOpen();
       const timezoneInfo = getTimezoneInfo();
+      const wsStatus = webSocketFeed.getConnectionStatus();
+      
       const response = {
-        status: 'ok',
+        status: wsStatus.healthy ? 'ok' : 'degraded',
         timestamp: new Date().toISOString(),
         uptime: process.uptime(),
         timezone: timezoneInfo,
@@ -36,13 +39,21 @@ class HealthServer {
           isOpen: marketStatus,
           nextStatus: marketStatus ? 'Market is open' : formatTimeUntilMarketOpen()
         },
+        websocket: {
+          connected: wsStatus.connected,
+          healthy: wsStatus.healthy,
+          lastPong: new Date(wsStatus.lastPong).toISOString(),
+          timeSinceLastPong: Date.now() - wsStatus.lastPong
+        },
         bot: {
           running: true,
           version: '1.0.0'
         }
       };
 
-      res.json(response);
+      // Return 200 if healthy, 503 if degraded but still functional
+      const statusCode = wsStatus.healthy ? 200 : 503;
+      res.status(statusCode).json(response);
     });
 
     // Root endpoint
@@ -75,6 +86,22 @@ class HealthServer {
         timestamp: Date.now() 
       });
     });
+
+    // WebSocket status endpoint
+    this.app.get('/websocket', (req, res) => {
+      const wsStatus = webSocketFeed.getConnectionStatus();
+      const response = {
+        connected: wsStatus.connected,
+        healthy: wsStatus.healthy,
+        lastPong: new Date(wsStatus.lastPong).toISOString(),
+        timeSinceLastPong: Date.now() - wsStatus.lastPong,
+        healthThreshold: 60000, // 60 seconds
+        timestamp: new Date().toISOString()
+      };
+
+      const statusCode = wsStatus.connected ? (wsStatus.healthy ? 200 : 503) : 503;
+      res.status(statusCode).json(response);
+    });
   }
 
   public start(): void {
@@ -82,6 +109,7 @@ class HealthServer {
       logger.info(`🌐 Health server running on port ${this.port}`);
       logger.info(`📡 Health check available at: http://localhost:${this.port}/health`);
       logger.info(`🔄 Keep-alive endpoint: http://localhost:${this.port}/ping`);
+      logger.info(`📊 WebSocket status: http://localhost:${this.port}/websocket`);
     });
 
     this.server.on('error', (error: any) => {
