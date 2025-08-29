@@ -44,11 +44,20 @@ class TradingStrategy {
   private async processTick(indexName: IndexName, priceUpdate: PriceUpdate): Promise<void> {
     // Skip if market is closed
     if (!isMarketOpen()) {
+      const shouldLog = Date.now() % 30000 < 1000; // Log every 30 seconds
+      if (shouldLog) {
+        logger.info(`🔒 ${indexName} - Market closed, skipping analysis`);
+      }
       return;
     }
 
     // Skip if in cooldown
     if (this.isInCooldown(indexName)) {
+      const cooldownRemaining = Math.ceil((config.trading.signalCooldown - (Date.now() - (this.lastSignalTime[indexName] || 0))) / 1000);
+      const shouldLog = Date.now() % 30000 < 1000; // Log every 30 seconds
+      if (shouldLog) {
+        logger.info(`⏳ ${indexName} - Signal cooldown active, ${cooldownRemaining}s remaining`);
+      }
       return;
     }
 
@@ -83,6 +92,10 @@ class TradingStrategy {
 
     // Need enough data for analysis
     if (buffer.length < config.strategy.emaPeriod) {
+      const shouldLog = Date.now() % 30000 < 1000; // Log every 30 seconds
+      if (shouldLog) {
+        logger.info(`📊 ${indexName} - Insufficient data: ${buffer.length}/${config.strategy.emaPeriod} required for analysis`);
+      }
       return;
     }
 
@@ -94,6 +107,8 @@ class TradingStrategy {
         logger.error('Failed to execute signal:', error.message);
       });
       this.lastSignalTime[indexName] = Date.now();
+    } else if (signal && signal.confidence < config.strategy.confidenceThreshold) {
+      logger.info(`⚠️ ${indexName} - Signal generated but confidence too low: ${signal.confidence.toFixed(1)}% < ${config.strategy.confidenceThreshold}%`);
     }
   }
 
@@ -115,6 +130,11 @@ class TradingStrategy {
 
     // Check time filter (10:15 to 14:45)
     if (!this.isWithinTradingHours()) {
+      const shouldLog = Date.now() % 30000 < 1000; // Log every 30 seconds
+      if (shouldLog) {
+        const currentTime = new Date().toLocaleTimeString('en-IN', {timeZone: 'Asia/Kolkata'});
+        logger.info(`⏰ ${indexName} - Outside trading hours (${currentTime}), signals disabled until 10:15 AM - 2:45 PM`);
+      }
       return null;
     }
 
@@ -141,6 +161,40 @@ class TradingStrategy {
     // Check which conditions are met
     const allCeConditionsMet = Object.values(ceConditions).every(condition => condition === true);
     const allPeConditionsMet = Object.values(peConditions).every(condition => condition === true);
+
+    // Log detailed condition analysis every 10 seconds with current values
+    const shouldLogDetails = Date.now() % 10000 < 1000; // Log roughly every 10 seconds
+    
+    if (shouldLogDetails || allCeConditionsMet || allPeConditionsMet) {
+      const triggerLevel = this.getTriggerLevel(currentPrice, indexName);
+      
+      logger.info(`🔍 ${indexName} Signal Analysis - Current Values:`);
+      logger.info(`   💰 Current Price: ${currentPrice} | VWAP: ${vwap.toFixed(2)}`);
+      logger.info(`   📊 RSI: ${rsi.toFixed(2)} | Volume Ratio: ${volumeRatio.toFixed(2)}x`);
+      logger.info(`   🎯 Trigger Level: ${triggerLevel.toFixed(2)} | IV Rank: ${ivRank.toFixed(2)}`);
+      logger.info(`   ⏰ Current Time: ${new Date().toLocaleTimeString('en-IN', {timeZone: 'Asia/Kolkata'})}`);
+      
+      logger.info(`📈 CE Conditions Status:`);
+      logger.info(`   ✅ Price Breakout: ${ceConditions.price_breakout} (${currentPrice} > ${triggerLevel.toFixed(2)})`);
+      logger.info(`   ✅ Volume Surge: ${ceConditions.volume_surge} (${volumeRatio.toFixed(2)}x > 1.8x)`);
+      logger.info(`   ✅ RSI Momentum: ${ceConditions.momentum} (RSI ${rsi.toFixed(2)} between 50-75)`);
+      logger.info(`   ✅ Trend Up: ${ceConditions.trend_alignment} (Price ${currentPrice} > VWAP ${vwap.toFixed(2)})`);
+      logger.info(`   ✅ IV Rank: ${ceConditions.volatility} (IV ${ivRank.toFixed(2)} > 25)`);
+      logger.info(`   ✅ Time Filter: ${ceConditions.time_filter}`);
+      
+      logger.info(`📉 PE Conditions Status:`);
+      logger.info(`   ✅ Price Breakout: ${peConditions.price_breakout} (${currentPrice} > ${triggerLevel.toFixed(2)})`);
+      logger.info(`   ✅ Volume Surge: ${peConditions.volume_surge} (${volumeRatio.toFixed(2)}x > 1.8x)`);
+      logger.info(`   ✅ RSI Momentum: ${peConditions.momentum} (RSI ${rsi.toFixed(2)} between 45-70)`);
+      logger.info(`   ✅ Trend Down: ${peConditions.trend_alignment} (Price ${currentPrice} < VWAP ${vwap.toFixed(2)})`);
+      logger.info(`   ✅ IV Rank: ${peConditions.volatility} (IV ${ivRank.toFixed(2)} > 30)`);
+      logger.info(`   ✅ Time Filter: ${peConditions.time_filter}`);
+      
+      const ceMet = Object.values(ceConditions).filter(c => c === true).length;
+      const peMet = Object.values(peConditions).filter(c => c === true).length;
+      
+      logger.info(`🎯 Summary: CE (${ceMet}/6 conditions) | PE (${peMet}/6 conditions) | Need ALL 6 for signal`);
+    }
 
     // Prioritize CE if both conditions are met (bullish bias)
     let optionType: OptionType;
