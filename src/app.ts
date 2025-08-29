@@ -188,12 +188,10 @@ class WebSocketTradingBot {
         // Get market status
         const marketStatus = getMarketStatus();
         let marketInfo = '';
-        if (marketStatus.nse && marketStatus.mcx) {
-          marketInfo = 'NSE+MCX: OPEN';
-        } else if (marketStatus.nse) {
-          marketInfo = 'NSE: OPEN, MCX: OPEN';
-        } else if (marketStatus.mcx) {
-          marketInfo = 'NSE: CLOSED, MCX: OPEN';
+        if (marketStatus.nse) {
+          marketInfo = 'NSE: OPEN';
+        } else {
+          marketInfo = 'NSE: CLOSED';
         }
 
         logger.info(`💚 BOT WORKING - Runtime: ${uptimeHours}h ${displayMinutes}m | ${marketInfo} | Signals: ${this.stats.signals} | Status: MONITORING ALL CONDITIONS`);

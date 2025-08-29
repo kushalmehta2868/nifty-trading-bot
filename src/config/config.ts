@@ -44,19 +44,5 @@ export const config: Config = {
       basePrice: 55000,
       symbol: 'NIFTY BANK'
     },
-    GOLD: {
-      name: 'GOLD',
-      token: '99920003', // ✅ Will get from master file
-      lotSize: 1,
-      basePrice: 62000,
-      symbol: 'MCXGOLDEX'
-    },
-    SILVER: {
-      name: 'SILVER',
-      token: '445004', // ✅ Will get from master file
-      lotSize: 30,
-      basePrice: 77000,
-      symbol: 'SILVER05DEC25FUT'
-    }
   }
 };

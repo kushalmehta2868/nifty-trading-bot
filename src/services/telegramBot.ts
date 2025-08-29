@@ -2,6 +2,7 @@ import TelegramBot from 'node-telegram-bot-api';
 import { config } from '../config/config';
 import { logger } from '../utils/logger';
 import { TradingSignal, TradingStats } from '../types';
+import { getMarketStatus, isNSEMarketOpen } from '../utils/marketHours';
 
 class TelegramBotService {
   private bot: TelegramBot | null = null;
@@ -129,9 +130,6 @@ ${exitText}
       const botInfo = await this.bot.getMe();
       logger.info(`📱 Telegram bot verified: @${botInfo.username}`);
 
-      // Import the market status functions
-      const { getMarketStatus, isNSEMarketOpen, isMCXMarketOpen } = require('../utils/marketHours');
-
       // Get current market status
       const marketStatus = getMarketStatus();
       const currentTime = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' });
@@ -140,26 +138,20 @@ ${exitText}
       let marketInfo = '';
       let marketStatusText = '';
 
-      if (marketStatus.nse && marketStatus.mcx) {
-        marketInfo = '📡 *Streaming:* NIFTY, Bank NIFTY, GOLD & SILVER';
-        marketStatusText = '🟢 *All Markets Open* (NSE + MCX)';
-      } else if (marketStatus.nse && !marketStatus.mcx) {
-        marketInfo = '📡 *Streaming:* NIFTY & Bank NIFTY (Active), GOLD & SILVER (Waiting)';
-        marketStatusText = '🟡 *NSE Open, MCX Closed*';
-      } else if (!marketStatus.nse && marketStatus.mcx) {
-        marketInfo = '📡 *Streaming:* GOLD & SILVER (Active), NIFTY & Bank NIFTY (Waiting)';
-        marketStatusText = '🟡 *MCX Open, NSE Closed*';
+      if (marketStatus.nse) {
+        marketInfo = '📡 *Streaming:* NIFTY & Bank NIFTY (Active)';
+        marketStatusText = '🟢 *NSE Market Open*';
       } else {
-        marketInfo = '📡 *Streaming:* All Markets Waiting';
-        marketStatusText = '🔴 *All Markets Closed*';
+        marketInfo = '📡 *Streaming:* NSE Markets Waiting';
+        marketStatusText = '🔴 *NSE Market Closed*';
       }
 
       // Determine active instruments count
-      const activeInstruments = (marketStatus.nse ? 2 : 0) + (marketStatus.mcx ? 2 : 0);
-      const totalInstruments = 4;
+      const activeInstruments = marketStatus.nse ? 2 : 0;
+      const totalInstruments = 2;
 
       const message = `
-🤖 *Multi-Market Trading Bot Started*
+🤖 *NSE Options Trading Bot Started*
 
 ⚡ *Data Source:* Live Angel One WebSocket
 ${marketInfo}
@@ -168,16 +160,13 @@ ${marketStatusText}
 📊 *Current Status (${currentTime}):*
 *Active Instruments:* ${activeInstruments}/${totalInstruments}
 *NSE Status:* ${marketStatus.nse ? '🟢 OPEN' : '🔴 CLOSED'}
-*MCX Status:* ${marketStatus.mcx ? '🟢 OPEN' : '🔴 CLOSED'}
 
-🎯 *Strategy:* Multi-Market Breakout Trading
+🎯 *Strategy:* NSE Options Breakout Trading
 *Target Instruments:*
 • NIFTY & Bank NIFTY (NSE Options)
-• GOLD & SILVER (MCX Options)
 
 ⏰ *Market Hours:*
-• NSE: 9:15 AM - 3:30 PM
-• MCX: 9:00 AM - 11:30 PM
+• NSE: 9:30 AM - 3:00 PM
 
 🔧 *Configuration:*
 • Auto Trade: ${config.trading.autoTrade ? '✅ Enabled' : '❌ Disabled'}
@@ -192,16 +181,16 @@ ${marketStatusText}
 • IV rank analysis
 
 ${config.trading.paperTrading ?
-          '*🎯 Ready for multi-market paper trading with real data!*' :
-          '*🚀 Ready to hunt for breakouts across NSE & MCX markets!*'}
+          '*🎯 Ready for NSE options paper trading with real data!*' :
+          '*🚀 Ready to hunt for breakouts in NSE options markets!*'}
 
-${!marketStatus.any ?
+${!marketStatus.nse ?
           '\n⏳ *Bot will activate automatically when markets open*' :
           '\n✅ *Bot is actively monitoring for trading signals*'}
 `.trim();
 
       await this.sendMessage(message);
-      logger.info('📱 Multi-market startup message sent to Telegram');
+      logger.info('📱 NSE options startup message sent to Telegram');
 
     } catch (error) {
       logger.error('Failed to send startup message:', (error as Error).message);

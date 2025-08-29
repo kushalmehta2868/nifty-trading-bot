@@ -20,9 +20,7 @@ class WebSocketFeed {
   private subscribers: PriceSubscriber[] = [];
   private priceData: MarketData = {
     NIFTY: { prices: [], volumes: [], currentPrice: 0, currentVolume: 0, lastUpdate: 0 },
-    BANKNIFTY: { prices: [], volumes: [], currentPrice: 0, currentVolume: 0, lastUpdate: 0 },
-    GOLD: { prices: [], volumes: [], currentPrice: 0, currentVolume: 0, lastUpdate: 0 },
-    SILVER: { prices: [], volumes: [], currentPrice: 0, currentVolume: 0, lastUpdate: 0 }
+    BANKNIFTY: { prices: [], volumes: [], currentPrice: 0, currentVolume: 0, lastUpdate: 0 }
   };
   private pingInterval: NodeJS.Timeout | null = null;
   private pongTimeout: NodeJS.Timeout | null = null;
@@ -51,7 +49,7 @@ class WebSocketFeed {
         await new Promise(resolve => setTimeout(resolve, 10000));
 
         let hasWebSocketData = false;
-        for (const indexName of ['NIFTY', 'BANKNIFTY', 'GOLD', 'SILVER'] as IndexName[]) {
+        for (const indexName of ['NIFTY', 'BANKNIFTY'] as IndexName[]) {
           if (this.getCurrentPrice(indexName) > 0) {
             hasWebSocketData = true;
             break;
@@ -148,27 +146,17 @@ class WebSocketFeed {
     const subscribeMsg = {
       correlationID: 'tradingbot_' + Date.now(),
       action: 1,
-      mode: 1, // 🔥 Try mode 1 instead of mode 3 for basic LTP
-      exchangeType: 1, // 🔥 Single exchange per message
+      mode: 3, // Mode 3 for full market data including volume
+      exchangeType: 1, // NSE
       tokens: [config.indices.NIFTY.token, config.indices.BANKNIFTY.token]
     };
 
     if (this.isConnected && this.ws && this.ws.readyState === WebSocket.OPEN) {
-      logger.info('📡 Sending NSE subscription...');
+      logger.info('📡 Sending NSE subscription for full market data...');
       this.ws.send(JSON.stringify(subscribeMsg));
 
-      // 🔥 Send separate message for MCX
-      setTimeout(() => {
-        const mcxMsg = {
-          correlationID: 'mcx_' + Date.now(),
-          action: 1,
-          mode: 1,
-          exchangeType: 5, // MCX
-          tokens: [config.indices.GOLD.token, config.indices.SILVER.token]
-        };
-        logger.info('📡 Sending MCX subscription...');
-        this.ws!.send(JSON.stringify(mcxMsg));
-      }, 1000);
+      // Only NSE subscription needed now
+      logger.info('📡 NSE subscription completed');
     }
   }
 
@@ -192,15 +180,21 @@ class WebSocketFeed {
         const message = JSON.parse(rawMessage);
         logger.info('🔍 Parsed JSON:', JSON.stringify(message, null, 2));
 
-        // 🔥 Check for different message types Angel One sends
+        // Check for different message types Angel One sends
         if (message.tk && message.lp) {
-          // Format 1: tk=token, lp=last price
-          this.processTickData(message.tk, message.lp, message.v || 0);
+          // Format 1: tk=token, lp=last price, v=volume
+          const volume = message.v || message.vol || message.volume || 0;
+          this.processTickData(message.tk, message.lp, volume);
         } else if (message.token && message.ltp) {
-          // Format 2: token, ltp
-          this.processTickData(message.token, message.ltp, message.volume || 0);
+          // Format 2: token, ltp, volume fields
+          const volume = message.volume || message.vol || message.v || 0;
+          this.processTickData(message.token, message.ltp, volume);
+        } else if (message.symbol_token && message.ltp) {
+          // Format 3: symbol_token format
+          const volume = message.volume || message.vol || message.v || 0;
+          this.processTickData(message.symbol_token, message.ltp, volume);
         } else {
-          logger.info('📝 Other message type:', message);
+          logger.info('📝 Unknown message format - full data:', JSON.stringify(message, null, 2));
         }
       }
     } catch (error) {
@@ -213,8 +207,6 @@ class WebSocketFeed {
 
     if (token === config.indices.NIFTY.token) indexName = 'NIFTY';
     else if (token === config.indices.BANKNIFTY.token) indexName = 'BANKNIFTY';
-    else if (token === config.indices.GOLD.token) indexName = 'GOLD';
-    else if (token === config.indices.SILVER.token) indexName = 'SILVER';
 
     if (indexName) {
       logger.info(`🎉 TICK: ${indexName} = ₹${price}`);
@@ -409,23 +401,34 @@ class WebSocketFeed {
     this.restPollingInterval = setInterval(async () => {
       try {
         // Poll all instruments via REST API
-        for (const indexName of ['NIFTY', 'BANKNIFTY', 'GOLD', 'SILVER'] as IndexName[]) {
+        for (const indexName of ['NIFTY', 'BANKNIFTY'] as IndexName[]) {
+          const exchange = 'NSE';
+          
           const response = await angelAPI.makeRequest(
             '/rest/secure/angelbroking/market/v1/quote/',
             'POST',
             {
-              mode: 'LTP',
+              mode: 'FULL', // Get full market data including volume
               exchangeTokens: {
-                [indexName === 'GOLD' || indexName === 'SILVER' ? 'MCX' : 'NSE']: [config.indices[indexName].token]
+                [exchange]: [config.indices[indexName].token]
               }
             }
           );
 
           if (response?.data?.fetched && response.data.fetched.length > 0) {
-            const price = parseFloat(response.data.fetched[0].ltp);
-            const volume = parseFloat(response.data.fetched[0].volume || '0');
+            const marketData = response.data.fetched[0];
+            const price = parseFloat(marketData.ltp);
+            
+            // Try different volume field names
+            const volume = parseFloat(
+              marketData.volume || 
+              marketData.vol || 
+              marketData.totalTradedVolume || 
+              marketData.totaltradedvolume || 
+              '0'
+            );
 
-            logger.debug(`📊 REST: ${indexName} = ₹${price}`);
+            logger.debug(`📊 REST: ${indexName} = ₹${price}, Volume=${volume} from ${exchange}`);
             this.updatePrice(indexName, price, volume);
           }
         }

@@ -21,17 +21,13 @@ interface PriceBufferItem {
 interface PriceBuffers {
   NIFTY: PriceBufferItem[];
   BANKNIFTY: PriceBufferItem[];
-  GOLD: PriceBufferItem[];
-  SILVER: PriceBufferItem[];
 }
 
 class TradingStrategy {
   private lastSignalTime: { [key in IndexName]?: number } = {};
   public priceBuffers: PriceBuffers = {
     NIFTY: [],
-    BANKNIFTY: [],
-    GOLD: [],
-    SILVER: []
+    BANKNIFTY: []
   };
 
 
@@ -52,7 +48,7 @@ class TradingStrategy {
       logger.info(`🔍 Checking WebSocket data (attempt ${attempt})...`);
 
       let hasData = false;
-      for (const indexName of ['NIFTY', 'BANKNIFTY', 'GOLD', 'SILVER'] as IndexName[]) {
+      for (const indexName of ['NIFTY', 'BANKNIFTY'] as IndexName[]) {
         const currentPrice = webSocketFeed.getCurrentPrice(indexName);
         const priceHistory = webSocketFeed.getPriceHistory(indexName);
         const wsStatus = webSocketFeed.getConnectionStatus();
@@ -173,8 +169,7 @@ class TradingStrategy {
       const shouldLog = Date.now() % 30000 < 1000; // Log every 30 seconds
       if (shouldLog) {
         const currentTime = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' });
-        const hours = (indexName === 'GOLD' || indexName === 'SILVER') ?
-          '9:00 AM - 11:30 PM' : '10:15 AM - 2:45 PM';
+        const hours = '9:30 AM - 3:00 PM';
         logger.info(`⏰ ${indexName} - Outside trading hours (${currentTime}), signals disabled during ${hours}`);
       }
       return null;
@@ -371,48 +366,20 @@ class TradingStrategy {
     }
   }
 
-  private generateExpiryString(indexName?: IndexName): string {
-    if (indexName === 'GOLD' || indexName === 'SILVER') {
-      // MCX options expire on different days (usually last Tuesday of month)
-      const today = new Date();
-      const nextMonth = new Date(today.getFullYear(), today.getMonth() + 1, 1);
-      const lastTuesday = new Date(nextMonth.getFullYear(), nextMonth.getMonth(), 0);
+  private generateExpiryString(): string {
+    // NSE weekly options logic
+    const today = new Date();
+    const nextTuesday = new Date(today);
+    const daysUntilTuesday = (2 - today.getDay() + 7) % 7;
+    const adjustedDays = daysUntilTuesday === 0 ? 7 : daysUntilTuesday;
+    nextTuesday.setDate(today.getDate() + adjustedDays);
 
-      // Find last Tuesday of current month
-      while (lastTuesday.getDay() !== 2) {
-        lastTuesday.setDate(lastTuesday.getDate() - 1);
-      }
+    const day = nextTuesday.getDate().toString().padStart(2, '0');
+    const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+    const month = months[nextTuesday.getMonth()];
+    const year = nextTuesday.getFullYear().toString().slice(-2);
 
-      if (lastTuesday < today) {
-        // Move to next month's last Tuesday
-        const nextMonthEnd = new Date(today.getFullYear(), today.getMonth() + 2, 0);
-        while (nextMonthEnd.getDay() !== 2) {
-          nextMonthEnd.setDate(nextMonthEnd.getDate() - 1);
-        }
-        lastTuesday.setTime(nextMonthEnd.getTime());
-      }
-
-      const day = lastTuesday.getDate().toString().padStart(2, '0');
-      const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-      const month = months[lastTuesday.getMonth()];
-      const year = lastTuesday.getFullYear().toString().slice(-2);
-
-      return `${day}${month}${year}`;
-    } else {
-      // Existing logic for NSE weekly options
-      const today = new Date();
-      const nextTuesday = new Date(today);
-      const daysUntilTuesday = (2 - today.getDay() + 7) % 7;
-      const adjustedDays = daysUntilTuesday === 0 ? 7 : daysUntilTuesday;
-      nextTuesday.setDate(today.getDate() + adjustedDays);
-
-      const day = nextTuesday.getDate().toString().padStart(2, '0');
-      const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-      const month = months[nextTuesday.getMonth()];
-      const year = nextTuesday.getFullYear().toString().slice(-2);
-
-      return `${day}${month}${year}`;
-    }
+    return `${day}${month}${year}`;
   }
 
   private calculateEMA(prices: number[], period: number): number {
@@ -454,10 +421,6 @@ class TradingStrategy {
         return Math.round(spotPrice / 100) * 100;
       case 'NIFTY':
         return Math.round(spotPrice / 50) * 50;
-      case 'GOLD':
-        return Math.round(spotPrice / 100) * 100; // Round to nearest 100
-      case 'SILVER':
-        return Math.round(spotPrice / 1000) * 1000; // Round to nearest 1000
       default:
         return Math.round(spotPrice / 50) * 50;
     }
@@ -465,15 +428,9 @@ class TradingStrategy {
 
 
   private generateOptionSymbol(indexName: IndexName, strike: number, optionType: OptionType): string {
-    const expiryString = this.generateExpiryString(indexName);
-
-    if (indexName === 'GOLD' || indexName === 'SILVER') {
-      // MCX options have different naming convention
-      return `${indexName}${expiryString}${strike}${optionType}`;
-    } else {
-      // NSE options
-      return `${indexName}${expiryString}${strike}${optionType}`;
-    }
+    const expiryString = this.generateExpiryString();
+    // NSE options
+    return `${indexName}${expiryString}${strike}${optionType}`;
   }
 
   private isInCooldown(indexName: IndexName): boolean {
@@ -488,10 +445,38 @@ class TradingStrategy {
 
     let totalPriceVolume = 0;
     let totalVolume = 0;
+    let hasRealVolume = false;
 
-    for (let i = 0; i < prices.length; i++) {
-      totalPriceVolume += prices[i] * volumes[i];
-      totalVolume += volumes[i];
+    // Check if we have any real volume data
+    for (let i = 0; i < volumes.length; i++) {
+      if (volumes[i] > 0) {
+        hasRealVolume = true;
+        break;
+      }
+    }
+
+    if (hasRealVolume) {
+      // Use real volume-weighted calculation
+      for (let i = 0; i < prices.length; i++) {
+        const volume = Math.max(1, volumes[i]); // Use minimum 1 if volume is 0
+        totalPriceVolume += prices[i] * volume;
+        totalVolume += volume;
+      }
+    } else {
+      // Fallback: Use price movement as volume proxy
+      logger.debug('No real volume data available, using price movement proxy for VWAP');
+      for (let i = 0; i < prices.length; i++) {
+        let volume;
+        if (i === 0) {
+          volume = 1;
+        } else {
+          const priceChange = Math.abs(prices[i] - prices[i - 1]);
+          const percentChange = priceChange / prices[i - 1];
+          volume = Math.max(0.1, percentChange * 100);
+        }
+        totalPriceVolume += prices[i] * volume;
+        totalVolume += volume;
+      }
     }
 
     return totalVolume > 0 ? totalPriceVolume / totalVolume : prices[prices.length - 1];
@@ -513,10 +498,6 @@ class TradingStrategy {
         return 50; // Default middle value
       }
 
-      if (indexName === 'GOLD' || indexName === 'SILVER') {
-        logger.debug(`Using fallback IV rank for ${indexName} (Greeks API unreliable for MCX)`);
-        return 50; // MCX options don't have reliable IV data
-      }
 
       // Only try Greeks API for NSE options during market hours
       const strike = this.calculateStrike(currentPrice, indexName);
@@ -591,31 +572,17 @@ class TradingStrategy {
       return isMarketOpen(); // General check
     }
 
-    if (indexName === 'GOLD' || indexName === 'SILVER') {
-      // MCX trading hours: 9:00 AM to 11:30 PM
-      const startTime = 900;  // 9:00 AM
-      const endTime = 2330;   // 11:30 PM
-      const isOpen = currentTime >= startTime && currentTime <= endTime;
+    // NSE trading hours: 9:30 AM to 3:00 PM (for signals)
+    const startTime = 930;  // 9:30 AM
+    const endTime = 1500;   // 3:00 PM
+    const isOpen = currentTime >= startTime && currentTime <= endTime;
 
-      // ✅ Log MCX hours for debugging
-      if (!isOpen) {
-        logger.debug(`MCX ${indexName} outside hours: ${currentTime} (need 900-2330)`);
-      }
-
-      return isOpen;
-    } else {
-      // NSE trading hours: 10:15 AM to 2:45 PM (for signals)
-      const startTime = 1015; // 10:15 AM
-      const endTime = 1445;   // 2:45 PM
-      const isOpen = currentTime >= startTime && currentTime <= endTime;
-
-      // ✅ Log NSE hours for debugging
-      if (!isOpen) {
-        logger.debug(`NSE ${indexName} outside hours: ${currentTime} (need 1015-1445)`);
-      }
-
-      return isOpen;
+    // Log NSE hours for debugging
+    if (!isOpen) {
+      logger.debug(`NSE ${indexName} outside hours: ${currentTime} (need 930-1500)`);
     }
+
+    return isOpen;
   }
 
 
@@ -627,7 +594,7 @@ class TradingStrategy {
       const wsStatus = webSocketFeed.getConnectionStatus();
       summary += `🔗 WebSocket: ${wsStatus.connected ? '✅ Connected' : '❌ Disconnected'} | Healthy: ${wsStatus.healthy}\n\n`;
 
-      for (const indexName of ['NIFTY', 'BANKNIFTY', 'GOLD', 'SILVER'] as IndexName[]) {
+      for (const indexName of ['NIFTY', 'BANKNIFTY'] as IndexName[]) {
         const buffer = this.priceBuffers[indexName];
         const currentPrice = webSocketFeed.getCurrentPrice(indexName);
         const priceHistory = webSocketFeed.getPriceHistory(indexName);
