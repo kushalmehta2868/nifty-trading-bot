@@ -35,6 +35,7 @@ declare class OrderService {
     private placeRealOrder;
     private generateExpiryString;
     private calculateStrike;
+    private calculateOptimalStrike;
     private startOrderMonitoring;
     private checkOrderStatus;
     private processOrderUpdate;
@@ -51,6 +52,7 @@ declare class OrderService {
     private simulateOrderFill;
     private checkPaperTradeExit;
     updatePnL(amount: number): void;
+    private getStrategyName;
     resetDailyStats(): void;
     stopMonitoring(): void;
 }

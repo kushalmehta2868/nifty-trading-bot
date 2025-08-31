@@ -50,24 +50,29 @@ class OrderService {
 
   private async processSignal(signal: TradingSignal): Promise<void> {
     try {
+      logger.info(`🎯 SIGNAL RECEIVED: ${signal.indexName} ${signal.optionType} | Confidence: ${signal.confidence.toFixed(1)}% | Strategy: ${this.getStrategyName(signal.confidence)}`);
+      
       if (this.dailyTrades >= config.trading.maxPositions) {
-        logger.warn('Daily position limit reached, skipping order');
+        logger.warn(`❌ Daily position limit reached (${this.dailyTrades}/${config.trading.maxPositions}) - skipping order`);
         return;
       }
 
-      logger.info(`🔄 Processing order for ${signal.optionSymbol}`);
+      logger.info(`🔄 Processing ${config.trading.paperTrading ? 'PAPER' : 'REAL'} order for ${signal.optionSymbol}`);
+      logger.info(`💰 Order Details: Entry=₹${signal.entryPrice} | Target=₹${signal.target} | SL=₹${signal.stopLoss}`);
 
       // Check available balance only for real trading
       if (!config.trading.paperTrading) {
+        logger.info('💰 Checking account balance before real order placement...');
         const hasBalance = await this.checkSufficientBalance(signal);
         if (!hasBalance) {
-          logger.error('❌ Insufficient balance to place order - skipping signal');
+          logger.error('❌ INSUFFICIENT BALANCE - Cannot place real order');
           (process as any).emit('balanceInsufficient', {
             signal,
-            message: `⚠️ *INSUFFICIENT BALANCE*\n📈 *${signal.optionSymbol}*\n\n❌ Cannot place order - insufficient funds\n💰 Please add margin to continue trading`
+            message: `🚨 *INSUFFICIENT BALANCE ALERT*\n📈 *${signal.optionSymbol}*\n\n❌ Cannot place order - insufficient margin\n💰 Required: ~₹${(signal.entryPrice * config.indices[signal.indexName].lotSize * 0.2).toFixed(0)}\n\n🔧 Please add margin to continue trading`
           });
           return;
         }
+        logger.info('✅ Balance check passed - proceeding with real order');
       } else {
         logger.info('📄 Paper trading mode - skipping balance check');
       }
@@ -86,10 +91,12 @@ class OrderService {
         });
 
         this.dailyTrades++;
-        logger.info(`📄 Paper order simulated: ${signal.optionSymbol} - Paper Order ID: ${paperOrderId}`);
+        logger.info(`📄 PAPER ORDER PLACED: ${signal.optionSymbol} - Order ID: ${paperOrderId}`);
+        logger.info(`📊 Paper Order Status: ${this.dailyTrades}/${config.trading.maxPositions} positions used`);
         
         // Fill paper order immediately (no artificial delays)
         setTimeout(() => {
+          logger.info(`📄 Simulating instant fill for paper order: ${paperOrderId}`);
           this.simulateOrderFill(paperOrderId, signal);
         }, 100); // Minimal delay for async processing
         
@@ -101,6 +108,7 @@ class OrderService {
         });
       } else {
         // Real Trading Mode
+        logger.info('💰 Placing REAL BRACKET ORDER with Angel One...');
         const orderResponse = await this.placeRealOrder(signal);
 
         if (orderResponse.status && orderResponse.data?.orderid) {
@@ -113,13 +121,21 @@ class OrderService {
           });
 
           this.dailyTrades++;
-          logger.info(`✅ Real order placed: ${signal.optionSymbol} - Order ID: ${orderResponse.data.orderid}`);
+          logger.info(`✅ REAL BRACKET ORDER PLACED SUCCESSFULLY:`);
+          logger.info(`   📋 Order ID: ${orderResponse.data.orderid}`);
+          logger.info(`   📈 Symbol: ${signal.optionSymbol}`);
+          logger.info(`   💰 Entry: ₹${signal.entryPrice} | Target: ₹${signal.target} | SL: ₹${signal.stopLoss}`);
+          logger.info(`   📊 Position Status: ${this.dailyTrades}/${config.trading.maxPositions} real orders today`);
+          logger.info(`   🤖 Angel One will automatically handle exits at target/SL levels`);
 
           // Send confirmation to Telegram
-          (process as any).emit('orderPlaced', { signal, orderId: orderResponse.data.orderid });
+          (process as any).emit('orderPlaced', { signal, orderId: orderResponse.data.orderid, isPaperTrade: false });
         } else {
-          logger.error(`Order placement failed: ${orderResponse.message}`);
-          throw new Error(`Order failed: ${orderResponse.message}`);
+          logger.error(`❌ REAL ORDER PLACEMENT FAILED:`);
+          logger.error(`   📋 Response Status: ${orderResponse.status}`);
+          logger.error(`   💬 Error Message: ${orderResponse.message}`);
+          logger.error(`   📈 Signal: ${signal.optionSymbol}`);
+          throw new Error(`Real order failed: ${orderResponse.message}`);
         }
       }
 
@@ -145,7 +161,8 @@ class OrderService {
 
       // Get option symbol token (required for Angel API)
       const expiry = this.generateExpiryString();
-      const strike = this.calculateStrike(signal.spotPrice, signal.indexName);
+      // Use the same optimal strike calculation as strategy for consistency
+      const strike = this.calculateOptimalStrike(signal.spotPrice, signal.indexName, signal.optionType);
 
       const symbolToken = await angelAPI.getOptionToken(
         signal.indexName,
@@ -230,6 +247,37 @@ class OrderService {
   private calculateStrike(spotPrice: number, indexName: string): number {
     const roundTo = indexName === 'BANKNIFTY' ? 100 : 50;
     return Math.round(spotPrice / roundTo) * roundTo;
+  }
+
+  // Optimal strike calculation matching strategy.ts for better liquidity
+  private calculateOptimalStrike(spotPrice: number, indexName: string, optionType: 'CE' | 'PE' | undefined): number {
+    let baseStrike: number;
+    let strikeInterval: number;
+    
+    switch (indexName) {
+      case 'BANKNIFTY':
+        baseStrike = Math.round(spotPrice / 100) * 100;
+        strikeInterval = 100;
+        break;
+      case 'NIFTY':
+        baseStrike = Math.round(spotPrice / 50) * 50;
+        strikeInterval = 50;
+        break;
+      default:
+        baseStrike = Math.round(spotPrice / 50) * 50;
+        strikeInterval = 50;
+    }
+
+    // For better liquidity, choose strikes that are slightly out-of-the-money (OTM)
+    if (optionType === 'CE') {
+      // For CE options, go 1 strike above ATM for better liquidity
+      return baseStrike + strikeInterval;
+    } else if (optionType === 'PE') {
+      // For PE options, go 1 strike below ATM for better liquidity
+      return baseStrike - strikeInterval;
+    }
+    
+    return baseStrike; // Fallback to ATM if optionType is undefined
   }
 
   private startOrderMonitoring(): void {
@@ -628,7 +676,8 @@ ${pnlColor} *P&L:* ₹${order.pnl?.toFixed(2)}
     try {
       // Get real-time option price from Angel One API
       const expiry = this.generateExpiryString();
-      const strike = this.calculateStrike(activeOrder.signal.spotPrice, activeOrder.signal.indexName);
+      // Use optimal strike calculation for consistency with strategy
+      const strike = this.calculateOptimalStrike(activeOrder.signal.spotPrice, activeOrder.signal.indexName, activeOrder.signal.optionType);
       
       const symbolToken = await angelAPI.getOptionToken(
         activeOrder.signal.indexName,
@@ -706,11 +755,17 @@ ${pnlColor} *P&L:* ₹${order.pnl?.toFixed(2)}
     this.dailyPnL += amount;
   }
 
+  private getStrategyName(confidence: number): string {
+    if (confidence >= 90) return 'Multi-Timeframe Confluence';
+    if (confidence >= 80) return 'Bollinger+RSI';
+    return 'Price Action+Momentum';
+  }
+
   public resetDailyStats(): void {
     this.dailyTrades = 0;
     this.dailyPnL = 0;
     this.activeOrders = [];
-    logger.info('Daily stats reset');
+    logger.info('📊 Daily stats reset - ready for new trading session');
   }
 
   public stopMonitoring(): void {

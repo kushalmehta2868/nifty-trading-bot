@@ -5,6 +5,7 @@ const strategy_1 = require("./services/strategy");
 const telegramBot_1 = require("./services/telegramBot");
 const orderService_1 = require("./services/orderService");
 const healthServer_1 = require("./services/healthServer");
+const healthMonitor_1 = require("./services/healthMonitor");
 const logger_1 = require("./utils/logger");
 const marketHours_1 = require("./utils/marketHours");
 class WebSocketTradingBot {
@@ -46,10 +47,12 @@ class WebSocketTradingBot {
             // 4. Initialize other services
             await telegramBot_1.telegramBot.initialize();
             await orderService_1.orderService.initialize();
-            // 5. Send startup notification
+            // 5. Initialize Health Monitor
+            await healthMonitor_1.healthMonitor.initialize();
+            // 6. Send startup notification
             await telegramBot_1.telegramBot.sendStartupMessage();
             this.isRunning = true;
-            logger_1.logger.info('✅ All services initialized successfully');
+            logger_1.logger.info('✅ All services initialized successfully with comprehensive monitoring');
         }
         catch (error) {
             logger_1.logger.error('Failed to start trading bot:', error.message);

@@ -13,6 +13,9 @@ declare class TradingStrategy {
     initialize(): Promise<void>;
     processTick(indexName: IndexName, priceUpdate: PriceUpdate): Promise<void>;
     private analyzeSignal;
+    private analyzeMultiTimeframeConfluence;
+    private analyzeBollingerRSIStrategy;
+    private analyzePriceActionStrategy;
     private executeSignal;
     private getRealOptionPrice;
     private generateExpiryString;
@@ -21,6 +24,16 @@ declare class TradingStrategy {
     private calculateStrike;
     private calculateOptimalStrike;
     private calculateSMA;
+    private calculateBollingerBands;
+    private calculateMomentum;
+    private calculateSupportResistance;
+    private compressToTimeframe;
+    private calculateConfluenceScore;
+    private checkAlignment;
+    private checkTrendAlignment;
+    private calculatePricePositionScore;
+    private calculateAdaptiveVolatility;
+    private calculateBasicVolatility;
     private generateOptionSymbol;
     private isSignalInCooldown;
     private getTriggerLevel;

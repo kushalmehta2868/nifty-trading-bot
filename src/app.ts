@@ -3,6 +3,7 @@ import { strategy } from './services/strategy';
 import { telegramBot } from './services/telegramBot';
 import { orderService } from './services/orderService';
 import { healthServer } from './services/healthServer';
+import { healthMonitor } from './services/healthMonitor';
 import { logger } from './utils/logger';
 import { config } from './config/config';
 import { isMarketOpen, getTimeUntilMarketOpen, formatTimeUntilMarketOpen, getMarketStatus } from './utils/marketHours';
@@ -54,11 +55,14 @@ class WebSocketTradingBot {
       await telegramBot.initialize();
       await orderService.initialize();
 
-      // 5. Send startup notification
+      // 5. Initialize Health Monitor
+      await healthMonitor.initialize();
+
+      // 6. Send startup notification
       await telegramBot.sendStartupMessage();
 
       this.isRunning = true;
-      logger.info('✅ All services initialized successfully');
+      logger.info('✅ All services initialized successfully with comprehensive monitoring');
 
     } catch (error) {
       logger.error('Failed to start trading bot:', (error as Error).message);
