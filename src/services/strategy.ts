@@ -14,7 +14,6 @@ import {
 
 interface PriceBufferItem {
   price: number;
-  volume?: number;
   timestamp: Date;
 }
 
@@ -24,7 +23,7 @@ interface PriceBuffers {
 }
 
 class TradingStrategy {
-  private lastSignalTime: { [key in IndexName]?: number } = {};
+  private lastSignalTime: { [key: string]: number } = {}; // Changed to track per signal type
   public priceBuffers: PriceBuffers = {
     NIFTY: [],
     BANKNIFTY: []
@@ -88,37 +87,13 @@ class TradingStrategy {
       return;
     }
 
-    // Skip if in cooldown
-    if (this.isInCooldown(indexName)) {
-      const cooldownRemaining = Math.ceil((config.trading.signalCooldown - (Date.now() - (this.lastSignalTime[indexName] || 0))) / 1000);
-      const shouldLog = Date.now() % 30000 < 1000; // Log every 30 seconds
-      if (shouldLog) {
-        logger.info(`⏳ ${indexName} - Signal cooldown active, ${cooldownRemaining}s remaining`);
-      }
-      return;
-    }
+    // No cooldown check here - will be checked per signal type in analyzeSignal
 
-    // Update price buffer with real volume data
+    // Update price buffer - volume data removed as it's unreliable for indices
     const buffer = this.priceBuffers[indexName];
-
-    // Get real volume data from WebSocket or fetch from API if not available
-    let realVolume = 0;
-    try {
-      const priceData = webSocketFeed.getPriceData(indexName);
-      realVolume = priceData.currentVolume || 0;
-
-      // If WebSocket volume is not available, fetch from API
-      if (realVolume === 0) {
-        const volumeData = await angelAPI.getVolumeData(indexName);
-        realVolume = volumeData?.volume || 0;
-      }
-    } catch (error) {
-      logger.error(`Failed to get real volume for ${indexName}:`, (error as Error).message);
-    }
 
     buffer.push({
       price: priceUpdate.price,
-      volume: realVolume,
       timestamp: priceUpdate.timestamp
     });
 
@@ -140,10 +115,19 @@ class TradingStrategy {
     const signal = await this.analyzeSignal(indexName, priceUpdate.price, buffer);
 
     if (signal && signal.confidence >= config.strategy.confidenceThreshold) {
+      const signalKey = `${indexName}_${signal.optionType}`;
+      
+      // Check cooldown for this specific signal type
+      if (this.isSignalInCooldown(signalKey)) {
+        const cooldownRemaining = Math.ceil((config.trading.signalCooldown - (Date.now() - (this.lastSignalTime[signalKey] || 0))) / 1000);
+        logger.info(`⏳ ${indexName} ${signal.optionType} - Signal cooldown active, ${cooldownRemaining}s remaining`);
+        return;
+      }
+
       this.executeSignal(signal).catch(error => {
         logger.error('Failed to execute signal:', error.message);
       });
-      this.lastSignalTime[indexName] = Date.now();
+      this.lastSignalTime[signalKey] = Date.now();
     } else if (signal && signal.confidence < config.strategy.confidenceThreshold) {
       logger.info(`⚠️ ${indexName} - Signal generated but confidence too low: ${signal.confidence.toFixed(1)}% < ${config.strategy.confidenceThreshold}%`);
     }
@@ -155,15 +139,10 @@ class TradingStrategy {
     priceBuffer: PriceBufferItem[]
   ): Promise<TradingSignal | null> {
     const prices = priceBuffer.map(item => item.price);
-    const volumes = priceBuffer.map(item => item.volume || 0);
 
-    // Calculate technical indicators
+    // Calculate technical indicators (simplified - no volume or IV calculations)
     const rsi = this.calculateRSI(prices, config.strategy.rsiPeriod);
-    const vwap = this.calculateVWAP(prices, volumes);
-    const currentVolume = volumes[volumes.length - 1];
-    const avgVolume = this.calculateAverageVolume(volumes);
-    const volumeRatio = avgVolume > 0 ? currentVolume / avgVolume : 1;
-    const ivRank = await this.calculateRealIVRank(indexName, currentPrice);
+    const sma = this.calculateSMA(prices, 20); // Simple moving average instead of VWAP
 
     if (!this.isWithinTradingHours(indexName)) {
       const shouldLog = Date.now() % 30000 < 1000; // Log every 30 seconds
@@ -175,23 +154,19 @@ class TradingStrategy {
       return null;
     }
 
-    // CE Entry Conditions
+    // Simplified CE Entry Conditions (4 conditions instead of 6)
     const ceConditions = {
       price_breakout: currentPrice > this.getTriggerLevel(currentPrice, indexName),
-      volume_surge: volumeRatio > 1.8,
       momentum: rsi > 50 && rsi < 75,
-      trend_alignment: currentPrice > vwap,
-      volatility: ivRank > 25 || ivRank === 50, // ✅ Accept fallback IV
+      trend_alignment: currentPrice > sma,
       time_filter: this.isWithinTradingHours(indexName)
     };
 
-    // PE Entry Conditions
+    // Simplified PE Entry Conditions (4 conditions instead of 6)
     const peConditions = {
       price_breakout: currentPrice > this.getTriggerLevel(currentPrice, indexName),
-      volume_surge: volumeRatio > 1.8,
       momentum: rsi > 45 && rsi < 70,
-      trend_alignment: currentPrice < vwap,
-      volatility: ivRank > 30 || ivRank === 50, // ✅ Accept fallback IV
+      trend_alignment: currentPrice < sma,
       time_filter: this.isWithinTradingHours(indexName)
     };
 
@@ -206,31 +181,26 @@ class TradingStrategy {
       const triggerLevel = this.getTriggerLevel(currentPrice, indexName);
 
       logger.info(`🔍 ${indexName} Signal Analysis - Current Values:`);
-      logger.info(`   💰 Current Price: ${currentPrice} | VWAP: ${vwap.toFixed(2)}`);
-      logger.info(`   📊 RSI: ${rsi.toFixed(2)} | Volume Ratio: ${volumeRatio.toFixed(2)}x`);
-      logger.info(`   🎯 Trigger Level: ${triggerLevel.toFixed(2)} | IV Rank: ${ivRank.toFixed(2)}`);
+      logger.info(`   💰 Current Price: ${currentPrice} | SMA-20: ${sma.toFixed(2)}`);
+      logger.info(`   📊 RSI: ${rsi.toFixed(2)} | Trigger Level: ${triggerLevel.toFixed(2)}`);
       logger.info(`   ⏰ Current Time: ${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })}`);
 
       logger.info(`📈 CE Conditions Status:`);
       logger.info(`   ✅ Price Breakout: ${ceConditions.price_breakout} (${currentPrice} > ${triggerLevel.toFixed(2)})`);
-      logger.info(`   ✅ Volume Surge: ${ceConditions.volume_surge} (${volumeRatio.toFixed(2)}x > 1.8x)`);
       logger.info(`   ✅ RSI Momentum: ${ceConditions.momentum} (RSI ${rsi.toFixed(2)} between 50-75)`);
-      logger.info(`   ✅ Trend Up: ${ceConditions.trend_alignment} (Price ${currentPrice} > VWAP ${vwap.toFixed(2)})`);
-      logger.info(`   ✅ IV Rank: ${ceConditions.volatility} (IV ${ivRank.toFixed(2)} > 25)`);
+      logger.info(`   ✅ Trend Up: ${ceConditions.trend_alignment} (Price ${currentPrice} > SMA ${sma.toFixed(2)})`);
       logger.info(`   ✅ Time Filter: ${ceConditions.time_filter}`);
 
       logger.info(`📉 PE Conditions Status:`);
       logger.info(`   ✅ Price Breakout: ${peConditions.price_breakout} (${currentPrice} > ${triggerLevel.toFixed(2)})`);
-      logger.info(`   ✅ Volume Surge: ${peConditions.volume_surge} (${volumeRatio.toFixed(2)}x > 1.8x)`);
       logger.info(`   ✅ RSI Momentum: ${peConditions.momentum} (RSI ${rsi.toFixed(2)} between 45-70)`);
-      logger.info(`   ✅ Trend Down: ${peConditions.trend_alignment} (Price ${currentPrice} < VWAP ${vwap.toFixed(2)})`);
-      logger.info(`   ✅ IV Rank: ${peConditions.volatility} (IV ${ivRank.toFixed(2)} > 30)`);
+      logger.info(`   ✅ Trend Down: ${peConditions.trend_alignment} (Price ${currentPrice} < SMA ${sma.toFixed(2)})`);
       logger.info(`   ✅ Time Filter: ${peConditions.time_filter}`);
 
       const ceMet = Object.values(ceConditions).filter(c => c === true).length;
       const peMet = Object.values(peConditions).filter(c => c === true).length;
 
-      logger.info(`🎯 Summary: CE (${ceMet}/6 conditions) | PE (${peMet}/6 conditions) | Need ALL 6 for signal`);
+      logger.info(`🎯 Summary: CE (${ceMet}/4 conditions) | PE (${peMet}/4 conditions) | Need ALL 4 for signal`);
     }
 
     // Prioritize CE if both conditions are met (bullish bias)
@@ -253,27 +223,24 @@ class TradingStrategy {
       return null; // No conditions met
     }
 
-    const strike = this.calculateStrike(currentPrice, indexName);
+    const strike = this.calculateOptimalStrike(currentPrice, indexName, optionType);
     const optionSymbol = this.generateOptionSymbol(indexName, strike, optionType);
 
-    // Calculate confidence based on how well conditions are met
-    let confidence = 70; // Base confidence
-    confidence += Math.min(15, (volumeRatio - 1.8) * 10); // Volume surge strength
-
+    // Simplified confidence calculation based on remaining conditions
+    let confidence = 75; // Higher base confidence since we have fewer conditions
+    
     if (optionType === 'CE') {
-      confidence += Math.min(10, Math.max(0, (rsi - 50) / 2.5)); // CE RSI momentum
-      confidence += Math.min(5, Math.max(0, ivRank - 25) / 2); // CE IV rank
+      confidence += Math.min(15, Math.max(0, (rsi - 50) / 1.67)); // CE RSI momentum (0-15 points)
+      confidence += Math.min(10, Math.max(0, (currentPrice - sma) / currentPrice * 1000)); // Trend strength (0-10 points)
     } else {
-      confidence += Math.min(10, Math.max(0, (rsi - 45) / 2.5)); // PE RSI momentum  
-      confidence += Math.min(5, Math.max(0, ivRank - 30) / 2); // PE IV rank
+      confidence += Math.min(15, Math.max(0, (rsi - 45) / 1.67)); // PE RSI momentum (0-15 points)
+      confidence += Math.min(10, Math.max(0, (sma - currentPrice) / currentPrice * 1000)); // Trend strength (0-10 points)
     }
 
     logger.info(`🎯 ${conditionLabel} Entry Conditions Met for ${indexName}:`);
     logger.info(`   Price Breakout: ${entryConditions.price_breakout}`);
-    logger.info(`   Volume Surge: ${entryConditions.volume_surge} (${volumeRatio.toFixed(2)}x)`);
     logger.info(`   Momentum (RSI): ${entryConditions.momentum} (${rsi.toFixed(2)})`);
-    logger.info(`   Trend Alignment: ${entryConditions.trend_alignment} (Price: ${currentPrice}, VWAP: ${vwap.toFixed(2)})`);
-    logger.info(`   Volatility (IV): ${entryConditions.volatility} (${ivRank.toFixed(2)})`);
+    logger.info(`   Trend Alignment: ${entryConditions.trend_alignment} (Price: ${currentPrice}, SMA: ${sma.toFixed(2)})`);
     logger.info(`   Time Filter: ${entryConditions.time_filter}`);
 
     return {
@@ -288,14 +255,10 @@ class TradingStrategy {
       confidence: Math.min(95, confidence),
       timestamp: new Date(),
       technicals: {
-        ema: 0, // Not used in new strategy
+        ema: 0, // Not used
         rsi: parseFloat(rsi.toFixed(2)),
         priceChange: 0, // Calculate if needed
-        vwap: parseFloat(vwap.toFixed(2)),
-        currentVolume,
-        avgVolume,
-        volumeRatio: parseFloat(volumeRatio.toFixed(2)),
-        ivRank: parseFloat(ivRank.toFixed(2))
+        vwap: parseFloat(sma.toFixed(2)) // Using SMA as trend indicator
       }
     };
   }
@@ -426,6 +389,49 @@ class TradingStrategy {
     }
   }
 
+  // New optimized strike calculation for better liquidity
+  private calculateOptimalStrike(spotPrice: number, indexName: IndexName, optionType: OptionType): number {
+    let baseStrike: number;
+    let strikeInterval: number;
+    
+    switch (indexName) {
+      case 'BANKNIFTY':
+        baseStrike = Math.round(spotPrice / 100) * 100;
+        strikeInterval = 100;
+        break;
+      case 'NIFTY':
+        baseStrike = Math.round(spotPrice / 50) * 50;
+        strikeInterval = 50;
+        break;
+      default:
+        baseStrike = Math.round(spotPrice / 50) * 50;
+        strikeInterval = 50;
+    }
+
+    // For better liquidity, choose strikes that are slightly out-of-the-money (OTM)
+    // This typically has higher volume and better bid-ask spreads
+    
+    if (optionType === 'CE') {
+      // For CE options, go 1-2 strikes above ATM for better liquidity
+      return baseStrike + strikeInterval;
+    } else {
+      // For PE options, go 1-2 strikes below ATM for better liquidity
+      return baseStrike - strikeInterval;
+    }
+  }
+
+  // Simple Moving Average calculation
+  private calculateSMA(prices: number[], period: number): number {
+    if (prices.length < period) {
+      // If not enough data, use all available prices
+      period = prices.length;
+    }
+    
+    const recentPrices = prices.slice(-period);
+    const sum = recentPrices.reduce((acc, price) => acc + price, 0);
+    return sum / period;
+  }
+
 
   private generateOptionSymbol(indexName: IndexName, strike: number, optionType: OptionType): string {
     const expiryString = this.generateExpiryString();
@@ -433,116 +439,11 @@ class TradingStrategy {
     return `${indexName}${expiryString}${strike}${optionType}`;
   }
 
-  private isInCooldown(indexName: IndexName): boolean {
-    const lastTime = this.lastSignalTime[indexName];
+  private isSignalInCooldown(signalKey: string): boolean {
+    const lastTime = this.lastSignalTime[signalKey];
     return lastTime ? (Date.now() - lastTime) < config.trading.signalCooldown : false;
   }
 
-  private calculateVWAP(prices: number[], volumes: number[]): number {
-    if (prices.length !== volumes.length || prices.length === 0) {
-      return prices[prices.length - 1] || 0;
-    }
-
-    let totalPriceVolume = 0;
-    let totalVolume = 0;
-    let hasRealVolume = false;
-
-    // Check if we have any real volume data
-    for (let i = 0; i < volumes.length; i++) {
-      if (volumes[i] > 0) {
-        hasRealVolume = true;
-        break;
-      }
-    }
-
-    if (hasRealVolume) {
-      // Use real volume-weighted calculation
-      for (let i = 0; i < prices.length; i++) {
-        const volume = Math.max(1, volumes[i]); // Use minimum 1 if volume is 0
-        totalPriceVolume += prices[i] * volume;
-        totalVolume += volume;
-      }
-    } else {
-      // Fallback: Use price movement as volume proxy
-      logger.debug('No real volume data available, using price movement proxy for VWAP');
-      for (let i = 0; i < prices.length; i++) {
-        let volume;
-        if (i === 0) {
-          volume = 1;
-        } else {
-          const priceChange = Math.abs(prices[i] - prices[i - 1]);
-          const percentChange = priceChange / prices[i - 1];
-          volume = Math.max(0.1, percentChange * 100);
-        }
-        totalPriceVolume += prices[i] * volume;
-        totalVolume += volume;
-      }
-    }
-
-    return totalVolume > 0 ? totalPriceVolume / totalVolume : prices[prices.length - 1];
-  }
-
-  private calculateAverageVolume(volumes: number[]): number {
-    if (volumes.length === 0) return 1;
-    const sum = volumes.reduce((acc, vol) => acc + vol, 0);
-    return sum / volumes.length;
-  }
-
-  private async calculateRealIVRank(indexName: IndexName, currentPrice: number): Promise<number> {
-    try {
-      // Skip IV calculation after market hours or for MCX
-      const { isNSEMarketOpen, isMCXMarketOpen } = require('../utils/marketHours');
-
-      if (!isNSEMarketOpen() && (indexName === 'NIFTY' || indexName === 'BANKNIFTY')) {
-        logger.debug(`${indexName} - NSE market closed, using fallback IV rank`);
-        return 50; // Default middle value
-      }
-
-
-      // Only try Greeks API for NSE options during market hours
-      const strike = this.calculateStrike(currentPrice, indexName);
-
-      // ✅ Use correct Angel One API method names
-      const ceGreeks = await angelAPI.getOptionGreeks('NFO', indexName, strike.toString(), 'CE');
-      const peGreeks = await angelAPI.getOptionGreeks('NFO', indexName, strike.toString(), 'PE');
-
-      let ivSum = 0;
-      let ivCount = 0;
-
-      // ✅ Check for correct response field names
-      if (ceGreeks?.data?.impliedVolatility) {
-        ivSum += parseFloat(ceGreeks.data.impliedVolatility);
-        ivCount++;
-      }
-
-      if (peGreeks?.data?.impliedVolatility) {
-        ivSum += parseFloat(peGreeks.data.impliedVolatility);
-        ivCount++;
-      }
-
-      if (ivCount > 0) {
-        const currentIV = ivSum / ivCount;
-
-        let ivRank = 50; // Default middle value
-
-        if (currentIV > 25) ivRank = 80; // High IV
-        else if (currentIV > 20) ivRank = 60;
-        else if (currentIV > 15) ivRank = 40;
-        else ivRank = 20; // Low IV
-
-        logger.debug(`IV Rank for ${indexName}: ${ivRank} (Current IV: ${currentIV.toFixed(2)}%)`);
-        return ivRank;
-      }
-
-      // Fallback if no IV data available
-      logger.debug(`No IV data available for ${indexName}, using fallback`);
-      return 50; // Default middle value
-
-    } catch (error) {
-      logger.debug(`IV calculation failed for ${indexName}: ${(error as Error).message} - using fallback`);
-      return 50; // Always return fallback
-    }
-  }
 
 
   private getTriggerLevel(currentPrice: number, indexName: IndexName): number {
@@ -590,7 +491,7 @@ class TradingStrategy {
     try {
       let summary = '\n📊 Current Market Conditions:\n';
 
-      // 🔥 Add WebSocket connection status
+      // Add WebSocket connection status
       const wsStatus = webSocketFeed.getConnectionStatus();
       summary += `🔗 WebSocket: ${wsStatus.connected ? '✅ Connected' : '❌ Disconnected'} | Healthy: ${wsStatus.healthy}\n\n`;
 
@@ -599,7 +500,6 @@ class TradingStrategy {
         const currentPrice = webSocketFeed.getCurrentPrice(indexName);
         const priceHistory = webSocketFeed.getPriceHistory(indexName);
 
-        // 🔥 Enhanced logging
         logger.debug(`🔍 ${indexName} Debug: Buffer=${buffer.length}, CurrentPrice=${currentPrice}, History=${priceHistory.length}`);
 
         if (buffer.length === 0 || currentPrice === 0) {
@@ -608,7 +508,6 @@ class TradingStrategy {
         }
 
         const prices = buffer.map(item => item.price);
-        const volumes = buffer.map(item => item.volume || 0);
 
         if (prices.length < 5) {
           summary += `  ${indexName}: Insufficient data (${prices.length} points)\n`;
@@ -616,35 +515,27 @@ class TradingStrategy {
         }
 
         const rsi = this.calculateRSI(prices, Math.min(14, prices.length - 1));
-        const vwap = this.calculateVWAP(prices, volumes);
-        const currentVolume = volumes[volumes.length - 1];
-        const avgVolume = this.calculateAverageVolume(volumes);
-        const volumeRatio = avgVolume > 0 ? currentVolume / avgVolume : 1;
+        const sma = this.calculateSMA(prices, 20);
         const triggerLevel = this.getTriggerLevel(currentPrice, indexName);
-        const ivRank = await this.calculateRealIVRank(indexName, currentPrice);
 
         const ceConditions = {
           price_breakout: currentPrice > triggerLevel,
-          volume_surge: volumeRatio > 1.8,
           momentum: rsi > 50 && rsi < 75,
-          trend_alignment: currentPrice > vwap,
-          volatility: ivRank > 25,
+          trend_alignment: currentPrice > sma,
           time_filter: this.isWithinTradingHours()
         };
 
         const peConditions = {
           price_breakout: currentPrice > triggerLevel,
-          volume_surge: volumeRatio > 1.8,
           momentum: rsi > 45 && rsi < 70,
-          trend_alignment: currentPrice < vwap,
-          volatility: ivRank > 30,
+          trend_alignment: currentPrice < sma,
           time_filter: this.isWithinTradingHours()
         };
 
         const ceMet = Object.values(ceConditions).filter(c => c === true).length;
         const peMet = Object.values(peConditions).filter(c => c === true).length;
 
-        summary += `  ${indexName}: ₹${currentPrice} | RSI: ${rsi.toFixed(1)} | Vol: ${volumeRatio.toFixed(1)}x | CE: ${ceMet}/6 | PE: ${peMet}/6\n`;
+        summary += `  ${indexName}: ₹${currentPrice} | RSI: ${rsi.toFixed(1)} | SMA: ${sma.toFixed(1)} | CE: ${ceMet}/4 | PE: ${peMet}/4\n`;
       }
 
       return summary;

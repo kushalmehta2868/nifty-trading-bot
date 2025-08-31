@@ -21,7 +21,7 @@ export const config: Config = {
     autoTrade: process.env.AUTO_TRADE === 'true',
     paperTrading: process.env.PAPER_TRADING === 'true', // Paper trading mode - simulated orders
     maxPositions: parseInt(process.env.MAX_POSITIONS || '3'),
-    signalCooldown: parseInt(process.env.SIGNAL_COOLDOWN || '300000')
+    signalCooldown: parseInt(process.env.SIGNAL_COOLDOWN || '120000') // Reduced to 2 minutes for better opportunity capture
   },
   strategy: {
     emaPeriod: parseInt(process.env.EMA_PERIOD || '20'),
