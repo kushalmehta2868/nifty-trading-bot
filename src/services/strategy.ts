@@ -120,7 +120,7 @@ class TradingStrategy {
 
     if (signal && signal.confidence >= config.strategy.confidenceThreshold) {
       const signalKey = `${indexName}_${signal.optionType}`;
-      
+
       // Check cooldown for this specific signal type
       if (this.isSignalInCooldown(signalKey)) {
         const cooldownRemaining = Math.ceil((config.trading.signalCooldown - (Date.now() - (this.lastSignalTime[signalKey] || 0))) / 1000);
@@ -171,8 +171,8 @@ class TradingStrategy {
 
   // 🏆 STRATEGY 3: Multi-Timeframe Confluence (Highest Accuracy - 90%+)
   private async analyzeMultiTimeframeConfluence(
-    indexName: IndexName, 
-    currentPrice: number, 
+    indexName: IndexName,
+    currentPrice: number,
     prices: number[]
   ): Promise<TradingSignal | null> {
     if (prices.length < 50) return null; // Need more data for multi-timeframe
@@ -197,7 +197,7 @@ class TradingStrategy {
 
     // Confluence scoring system
     const confluenceScore = this.calculateConfluenceScore(
-      currentPrice, 
+      currentPrice,
       { rsi1, rsi5, rsi10 },
       { sma1, sma5, sma10 },
       { momentum1, momentum5, momentum10 }
@@ -205,7 +205,7 @@ class TradingStrategy {
 
     // Advanced volatility calculation for adaptive targets
     const volatility = this.calculateAdaptiveVolatility(tf1);
-    
+
     // RELAXED Multi-timeframe CE conditions (more practical)
     const mtfCEConditions = {
       majority_rsi_bullish: (+((rsi1 > 50)) + (+(rsi5 > 50)) + (+(rsi10 > 50))) >= 2, // 2 out of 3 RSI bullish
@@ -235,12 +235,12 @@ class TradingStrategy {
       logger.info(`   📊 RSI: 1t=${rsi1.toFixed(1)} | 5t=${rsi5.toFixed(1)} | 10t=${rsi10.toFixed(1)}`);
       logger.info(`   📈 Momentum: 1t=${momentum1.toFixed(2)}% | 5t=${momentum5.toFixed(2)}% | 10t=${momentum10.toFixed(2)}%`);
       logger.info(`   🎯 CE: ${Object.values(mtfCEConditions).filter(c => c === true).length}/5 | PE: ${Object.values(mtfPEConditions).filter(c => c === true).length}/5`);
-      
+
       // Show CE condition status
       if (Object.values(mtfCEConditions).filter(c => c === true).length < 5) {
         logger.info(`   📋 CE Missing: ${mtfCEConditions.majority_rsi_bullish ? '' : 'RSI-Majority '} ${mtfCEConditions.trend_alignment ? '' : 'Trend '} ${mtfCEConditions.momentum_positive ? '' : 'Momentum '} ${mtfCEConditions.decent_confluence ? '' : 'Confluence '} ${mtfCEConditions.time_filter ? '' : 'Time'}`);
       }
-      
+
       // Show PE condition status
       if (Object.values(mtfPEConditions).filter(c => c === true).length < 5) {
         logger.info(`   📋 PE Missing: ${mtfPEConditions.majority_rsi_bearish ? '' : 'RSI-Majority '} ${mtfPEConditions.trend_alignment ? '' : 'Trend '} ${mtfPEConditions.momentum_negative ? '' : 'Momentum '} ${mtfPEConditions.decent_confluence ? '' : 'Confluence '} ${mtfPEConditions.time_filter ? '' : 'Time'}`);
@@ -254,7 +254,7 @@ class TradingStrategy {
       const baseConfidence = 80; // Base for relaxed multi-timeframe
       const confluenceBonus = Math.min(15, (confluenceScore - 60) / 2);
       const trendBonus = mtfCEConditions.trend_alignment ? 5 : 0;
-      
+
       signal = {
         indexName,
         direction: 'UP',
@@ -280,7 +280,7 @@ class TradingStrategy {
       const baseConfidence = 80;
       const confluenceBonus = Math.min(15, (confluenceScore - 60) / 2);
       const trendBonus = mtfPEConditions.trend_alignment ? 5 : 0;
-      
+
       signal = {
         indexName,
         direction: 'DOWN',
@@ -308,8 +308,8 @@ class TradingStrategy {
 
   // 🎯 STRATEGY 1: Bollinger Bands + RSI (High Accuracy)
   private async analyzeBollingerRSIStrategy(
-    indexName: IndexName, 
-    currentPrice: number, 
+    indexName: IndexName,
+    currentPrice: number,
     prices: number[]
   ): Promise<TradingSignal | null> {
     // Calculate indicators
@@ -344,17 +344,17 @@ class TradingStrategy {
       logger.info(`   💰 Price: ${currentPrice} | BB Upper: ${bollinger.upper.toFixed(2)} | Middle: ${bollinger.middle.toFixed(2)} | Lower: ${bollinger.lower.toFixed(2)}`);
       logger.info(`   📊 RSI: ${rsi.toFixed(2)} | Momentum: ${momentum.toFixed(2)}%`);
       logger.info(`   📈 CE: ${Object.values(bollingerCEConditions).filter(c => c === true).length}/5 | PE: ${Object.values(bollingerPEConditions).filter(c => c === true).length}/5`);
-      
+
       // Show CE condition status
       if (Object.values(bollingerCEConditions).filter(c => c === true).length < 5) {
         logger.info(`   📋 CE Missing: ${bollingerCEConditions.price_near_lower_or_oversold ? '' : 'Near-Lower '} ${bollingerCEConditions.rsi_recovery_zone ? '' : 'RSI-Zone '} ${bollingerCEConditions.trend_support ? '' : 'Support '} ${bollingerCEConditions.momentum_positive ? '' : 'Momentum '} ${bollingerCEConditions.time_filter ? '' : 'Time'}`);
       }
-      
+
       // Show PE condition status  
       if (Object.values(bollingerPEConditions).filter(c => c === true).length < 5) {
         logger.info(`   📋 PE Missing: ${bollingerPEConditions.price_near_upper_or_overbought ? '' : 'Near-Upper '} ${bollingerPEConditions.rsi_decline_zone ? '' : 'RSI-Zone '} ${bollingerPEConditions.trend_resistance ? '' : 'Resistance '} ${bollingerPEConditions.momentum_negative ? '' : 'Momentum '} ${bollingerPEConditions.time_filter ? '' : 'Time'}`);
       }
-      
+
       // Strategy Analysis Update disabled for Telegram - user preference
       // if (shouldLogBollinger && Date.now() % 60000 < 1000) { // Every minute
       //   (process as any).emit('strategyAnalysis', {
@@ -382,7 +382,7 @@ class TradingStrategy {
     if (bollingerCEMet) {
       const strike = this.calculateOptimalStrike(currentPrice, indexName, 'CE');
       const confidence = 80 + Math.min(15, Math.abs(momentum) * 5) + (bollinger.squeeze ? 5 : 0);
-      
+
       signal = {
         indexName,
         direction: 'UP',
@@ -406,7 +406,7 @@ class TradingStrategy {
     } else if (bollingerPEMet) {
       const strike = this.calculateOptimalStrike(currentPrice, indexName, 'PE');
       const confidence = 80 + Math.min(15, Math.abs(momentum) * 5) + (bollinger.squeeze ? 5 : 0);
-      
+
       signal = {
         indexName,
         direction: 'DOWN',
@@ -434,8 +434,8 @@ class TradingStrategy {
 
   // 🚀 STRATEGY 2: Price Action + Momentum (Fast Response)
   private async analyzePriceActionStrategy(
-    indexName: IndexName, 
-    currentPrice: number, 
+    indexName: IndexName,
+    currentPrice: number,
     prices: number[]
   ): Promise<TradingSignal | null> {
     const rsi = this.calculateRSI(prices, 14);
@@ -468,12 +468,12 @@ class TradingStrategy {
       logger.info(`   💰 Price: ${currentPrice} | SMA: ${sma.toFixed(2)}`);
       logger.info(`   📊 RSI: ${rsi.toFixed(2)} | Momentum: ${momentum.toFixed(2)}%`);
       logger.info(`   📈 CE: ${Object.values(priceActionCEConditions).filter(c => c === true).length}/4 | PE: ${Object.values(priceActionPEConditions).filter(c => c === true).length}/4`);
-      
+
       // Show CE condition status
       if (Object.values(priceActionCEConditions).filter(c => c === true).length < 4) {
         logger.info(`   📋 CE Missing: ${priceActionCEConditions.price_momentum_bullish ? '' : 'Bullish-Momentum '} ${priceActionCEConditions.trend_bullish ? '' : 'Bullish-Trend '} ${priceActionCEConditions.not_overbought ? '' : 'Not-Overbought '} ${priceActionCEConditions.time_filter ? '' : 'Time'}`);
       }
-      
+
       // Show PE condition status
       if (Object.values(priceActionPEConditions).filter(c => c === true).length < 4) {
         logger.info(`   📋 PE Missing: ${priceActionPEConditions.price_momentum_bearish ? '' : 'Bearish-Momentum '} ${priceActionPEConditions.trend_bearish ? '' : 'Bearish-Trend '} ${priceActionPEConditions.not_oversold ? '' : 'Not-Oversold '} ${priceActionPEConditions.time_filter ? '' : 'Time'}`);
@@ -485,7 +485,7 @@ class TradingStrategy {
     if (actionCEMet) {
       const strike = this.calculateOptimalStrike(currentPrice, indexName, 'CE');
       const confidence = 78 + Math.min(15, Math.abs(momentum) * 3) + (supportResistance.nearSupport ? 7 : 0);
-      
+
       signal = {
         indexName,
         direction: 'UP',
@@ -509,7 +509,7 @@ class TradingStrategy {
     } else if (actionPEMet) {
       const strike = this.calculateOptimalStrike(currentPrice, indexName, 'PE');
       const confidence = 78 + Math.min(15, Math.abs(momentum) * 3) + (supportResistance.nearResistance ? 7 : 0);
-      
+
       signal = {
         indexName,
         direction: 'DOWN',
@@ -542,15 +542,15 @@ class TradingStrategy {
 
       if (realPrice) {
         signal.entryPrice = realPrice;
-        
+
         // 🚀 ADAPTIVE VOLATILITY-BASED TARGETS 
         const prices = this.priceBuffers[signal.indexName].map(item => item.price);
         const volatility = this.calculateAdaptiveVolatility(prices);
-        
+
         // Use adaptive targets based on current market volatility
         signal.target = parseFloat((realPrice * volatility.adaptive_target).toFixed(2));
         signal.stopLoss = parseFloat((realPrice * volatility.adaptive_sl).toFixed(2));
-        
+
         // Calculate expected profit potential
         const profitPotential = ((signal.target - realPrice) / realPrice) * 100;
         const riskAmount = ((realPrice - signal.stopLoss) / realPrice) * 100;
@@ -648,7 +648,9 @@ class TradingStrategy {
     let gains = 0;
     let losses = 0;
 
-    for (let i = 1; i <= period; i++) {
+    // Use the MOST RECENT prices, not the first ones
+    const startIndex = prices.length - period;
+    for (let i = startIndex; i < prices.length; i++) {
       const change = prices[i] - prices[i - 1];
       if (change > 0) gains += change;
       else losses -= change;
@@ -677,7 +679,7 @@ class TradingStrategy {
   private calculateOptimalStrike(spotPrice: number, indexName: IndexName, optionType: OptionType): number {
     let baseStrike: number;
     let strikeInterval: number;
-    
+
     switch (indexName) {
       case 'BANKNIFTY':
         baseStrike = Math.round(spotPrice / 100) * 100;
@@ -694,7 +696,7 @@ class TradingStrategy {
 
     // For better liquidity, choose strikes that are slightly out-of-the-money (OTM)
     // This typically has higher volume and better bid-ask spreads
-    
+
     if (optionType === 'CE') {
       // For CE options, go 1-2 strikes above ATM for better liquidity
       return baseStrike + strikeInterval;
@@ -710,7 +712,7 @@ class TradingStrategy {
       // If not enough data, use all available prices
       period = prices.length;
     }
-    
+
     const recentPrices = prices.slice(-period);
     const sum = recentPrices.reduce((acc, price) => acc + price, 0);
     return sum / period;
@@ -726,18 +728,18 @@ class TradingStrategy {
   } {
     const sma = this.calculateSMA(prices, period);
     const recentPrices = prices.slice(-Math.min(period, prices.length));
-    
+
     // Calculate standard deviation
     const variance = recentPrices.reduce((acc, price) => acc + Math.pow(price - sma, 2), 0) / recentPrices.length;
     const standardDev = Math.sqrt(variance);
-    
+
     const upper = sma + (stdDev * standardDev);
     const lower = sma - (stdDev * standardDev);
     const bandwidth = ((upper - lower) / sma) * 100;
-    
+
     // Squeeze detection: bandwidth < 10% indicates low volatility (breakout likely)
     const squeeze = bandwidth < 10;
-    
+
     return {
       upper,
       middle: sma,
@@ -750,10 +752,10 @@ class TradingStrategy {
   // Price momentum calculation - rate of change
   private calculateMomentum(prices: number[], period: number = 10): number {
     if (prices.length < period + 1) return 0;
-    
+
     const currentPrice = prices[prices.length - 1];
     const pastPrice = prices[prices.length - 1 - period];
-    
+
     return ((currentPrice - pastPrice) / pastPrice) * 100;
   }
 
@@ -768,11 +770,11 @@ class TradingStrategy {
     const resistance = Math.max(...recentPrices);
     const support = Math.min(...recentPrices);
     const currentPrice = prices[prices.length - 1];
-    
+
     // Within 0.3% of resistance/support
     const resistanceThreshold = resistance * 0.997;
     const supportThreshold = support * 1.003;
-    
+
     return {
       resistance,
       support,
@@ -809,7 +811,7 @@ class TradingStrategy {
     score += trendAlignment * 25;
 
     // Momentum confluence (0-25 points)
-    const momAlignment = this.checkAlignment([momentumData.momentum1, momentumData.momentum5, momentumData.momentum10]);
+    const momAlignment = this.checkMomentumAlignment([momentumData.momentum1, momentumData.momentum5, momentumData.momentum10]);
     score += momAlignment * 25;
 
     // Price position relative to moving averages (0-20 points)
@@ -822,6 +824,13 @@ class TradingStrategy {
   // Check alignment between multiple values (0-1 score)
   private checkAlignment(values: number[]): number {
     const directions = values.map(v => v > 50 ? 1 : -1); // For RSI-like values
+    const allSame = directions.every(d => d === directions[0]);
+    return allSame ? 1 : 0;
+  }
+
+  // Check momentum alignment (0-1 score)
+  private checkMomentumAlignment(momentumValues: number[]): number {
+    const directions = momentumValues.map(v => v > 0 ? 1 : -1); // Positive or negative momentum
     const allSame = directions.every(d => d === directions[0]);
     return allSame ? 1 : 0;
   }
@@ -841,7 +850,7 @@ class TradingStrategy {
       Math.abs(smaData.sma1 - smaData.sma5) / smaData.sma5,
       Math.abs(smaData.sma5 - smaData.sma10) / smaData.sma10
     ];
-    
+
     // Higher score for smaller deviations (more aligned)
     const avgDeviation = deviations.reduce((a, b) => a + b, 0) / deviations.length;
     return Math.max(0, 1 - (avgDeviation * 100)); // Convert to 0-1 scale
@@ -857,35 +866,35 @@ class TradingStrategy {
   } {
     const period = Math.min(20, prices.length);
     const recentPrices = prices.slice(-period);
-    
+
     // Calculate True Range for each period
     const trueRanges: number[] = [];
     for (let i = 1; i < recentPrices.length; i++) {
       const high = recentPrices[i];
       const low = recentPrices[i];
       const prevClose = recentPrices[i - 1];
-      
+
       const tr1 = Math.abs(high - low);
       const tr2 = Math.abs(high - prevClose);
       const tr3 = Math.abs(low - prevClose);
-      
+
       trueRanges.push(Math.max(tr1, tr2, tr3));
     }
-    
+
     const avgTrueRange = trueRanges.reduce((a, b) => a + b, 0) / trueRanges.length;
     const currentPrice = prices[prices.length - 1];
     const currentVol = avgTrueRange / currentPrice;
-    
+
     // Compare with longer period for expansion detection
     const longerPrices = prices.slice(-Math.min(40, prices.length));
     const longerVolatility = this.calculateBasicVolatility(longerPrices);
     const isExpanding = currentVol > longerVolatility * 1.2;
-    
+
     // Adaptive targets based on current volatility
     const volMultiplier = Math.max(1.5, Math.min(3.0, currentVol * 100));
     const adaptiveTarget = 1 + (volMultiplier * 0.05); // 7.5% to 15% target
     const adaptiveSL = 1 - (volMultiplier * 0.03); // 4.5% to 9% stop loss
-    
+
     return {
       current: currentVol,
       average: longerVolatility,
@@ -898,15 +907,15 @@ class TradingStrategy {
   // Basic volatility calculation helper
   private calculateBasicVolatility(prices: number[]): number {
     if (prices.length < 2) return 0;
-    
+
     const returns = [];
     for (let i = 1; i < prices.length; i++) {
       returns.push((prices[i] - prices[i - 1]) / prices[i - 1]);
     }
-    
+
     const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
     const variance = returns.reduce((acc, ret) => acc + Math.pow(ret - mean, 2), 0) / returns.length;
-    
+
     return Math.sqrt(variance);
   }
 
@@ -1003,14 +1012,14 @@ class TradingStrategy {
           const tf10 = this.compressToTimeframe(prices, 10);
           const rsi5 = this.calculateRSI(tf5, 14);
           const rsi10 = this.calculateRSI(tf10, 14);
-          
+
           const confluenceScore = this.calculateConfluenceScore(
             currentPrice,
             { rsi1: rsi, rsi5, rsi10 },
             { sma1: this.calculateSMA(prices, 20), sma5: this.calculateSMA(tf5, 20), sma10: this.calculateSMA(tf10, 20) },
             { momentum1: momentum, momentum5: this.calculateMomentum(tf5, 5), momentum10: this.calculateMomentum(tf10, 5) }
           );
-          
+
           mtfReady = confluenceScore >= 80 ? 1 : 0;
         }
 
@@ -1045,7 +1054,7 @@ class TradingStrategy {
     this.cleanupInterval = setInterval(() => {
       this.cleanupOldSignalTimes();
     }, 60 * 60 * 1000); // Every hour
-    
+
     logger.info('🧹 Strategy cleanup process started (hourly signal time cleanup)');
   }
 
@@ -1053,14 +1062,14 @@ class TradingStrategy {
     const now = Date.now();
     const dayAgo = now - (24 * 60 * 60 * 1000); // 24 hours ago
     let cleanedCount = 0;
-    
+
     Object.keys(this.lastSignalTime).forEach(key => {
       if (this.lastSignalTime[key] < dayAgo) {
         delete this.lastSignalTime[key];
         cleanedCount++;
       }
     });
-    
+
     if (cleanedCount > 0) {
       logger.info(`🧹 Cleaned up ${cleanedCount} old signal times older than 24 hours`);
     }
