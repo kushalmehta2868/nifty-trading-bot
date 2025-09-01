@@ -202,23 +202,21 @@ class TradingStrategy {
     // Advanced volatility calculation for adaptive targets
     const volatility = this.calculateAdaptiveVolatility(tf1);
     
-    // Multi-timeframe CE conditions (all timeframes must align)
+    // RELAXED Multi-timeframe CE conditions (more practical)
     const mtfCEConditions = {
-      all_rsi_bullish: rsi1 > 45 && rsi5 > 45 && rsi10 > 45, // All RSI bullish
-      all_trends_up: currentPrice > sma1 && sma1 > sma5 && sma5 > sma10, // Multi-TF trend
-      momentum_alignment: momentum1 > 0.2 && momentum5 > 0.1 && momentum10 > 0.05, // Accelerating momentum
-      high_confluence: confluenceScore >= 80, // High confluence score
-      volatility_expansion: volatility.isExpanding, // Volatility expanding (breakout)
+      majority_rsi_bullish: (+((rsi1 > 50)) + (+(rsi5 > 50)) + (+(rsi10 > 50))) >= 2, // 2 out of 3 RSI bullish
+      trend_alignment: currentPrice > sma1 && sma1 >= sma5 * 0.999, // More flexible trend
+      momentum_positive: momentum1 > 0.1 || momentum5 > 0.05, // Either timeframe has momentum
+      decent_confluence: confluenceScore >= 60, // Lowered from 80% to 60%
       time_filter: this.isWithinTradingHours(indexName)
     };
 
-    // Multi-timeframe PE conditions
+    // RELAXED Multi-timeframe PE conditions
     const mtfPEConditions = {
-      all_rsi_bearish: rsi1 < 55 && rsi5 < 55 && rsi10 < 55, // All RSI bearish
-      all_trends_down: currentPrice < sma1 && sma1 < sma5 && sma5 < sma10, // Multi-TF downtrend
-      momentum_alignment: momentum1 < -0.2 && momentum5 < -0.1 && momentum10 < -0.05, // Accelerating down
-      high_confluence: confluenceScore >= 80, // High confluence score
-      volatility_expansion: volatility.isExpanding, // Volatility expanding
+      majority_rsi_bearish: (+((rsi1 < 50)) + (+(rsi5 < 50)) + (+(rsi10 < 50))) >= 2, // 2 out of 3 RSI bearish
+      trend_alignment: currentPrice < sma1 && sma1 <= sma5 * 1.001, // More flexible trend
+      momentum_negative: momentum1 < -0.1 || momentum5 < -0.05, // Either timeframe has momentum
+      decent_confluence: confluenceScore >= 60, // Lowered from 80% to 60%
       time_filter: this.isWithinTradingHours(indexName)
     };
 
@@ -228,20 +226,20 @@ class TradingStrategy {
     // Log multi-timeframe analysis every 20 seconds (less frequent due to complexity)
     const shouldLogMTF = Date.now() % 20000 < 1000;
     if (shouldLogMTF || mtfCEMet || mtfPEMet) {
-      logger.info(`🏆 ${indexName} Multi-Timeframe Confluence:`);
-      logger.info(`   💰 Price: ${currentPrice} | Confluence: ${confluenceScore.toFixed(0)}% | Vol Expanding: ${volatility.isExpanding}`);
+      logger.info(`🏆 ${indexName} Multi-Timeframe Confluence (RELAXED):`);
+      logger.info(`   💰 Price: ${currentPrice} | Confluence: ${confluenceScore.toFixed(0)}%`);
       logger.info(`   📊 RSI: 1t=${rsi1.toFixed(1)} | 5t=${rsi5.toFixed(1)} | 10t=${rsi10.toFixed(1)}`);
       logger.info(`   📈 Momentum: 1t=${momentum1.toFixed(2)}% | 5t=${momentum5.toFixed(2)}% | 10t=${momentum10.toFixed(2)}%`);
-      logger.info(`   🎯 CE: ${Object.values(mtfCEConditions).filter(c => c === true).length}/6 | PE: ${Object.values(mtfPEConditions).filter(c => c === true).length}/6`);
+      logger.info(`   🎯 CE: ${Object.values(mtfCEConditions).filter(c => c === true).length}/5 | PE: ${Object.values(mtfPEConditions).filter(c => c === true).length}/5`);
     }
 
     let signal: TradingSignal | null = null;
 
     if (mtfCEMet) {
       const strike = this.calculateOptimalStrike(currentPrice, indexName, 'CE');
-      const baseConfidence = 85; // Higher base for multi-timeframe
-      const confluenceBonus = Math.min(10, (confluenceScore - 80) / 2);
-      const volatilityBonus = volatility.isExpanding ? 5 : 0;
+      const baseConfidence = 80; // Base for relaxed multi-timeframe
+      const confluenceBonus = Math.min(15, (confluenceScore - 60) / 2);
+      const trendBonus = mtfCEConditions.trend_alignment ? 5 : 0;
       
       signal = {
         indexName,
@@ -252,7 +250,7 @@ class TradingStrategy {
         entryPrice: 0,
         target: 0,
         stopLoss: 0,
-        confidence: Math.min(98, baseConfidence + confluenceBonus + volatilityBonus),
+        confidence: Math.min(98, baseConfidence + confluenceBonus + trendBonus),
         timestamp: new Date(),
         technicals: {
           ema: 0,
@@ -265,9 +263,9 @@ class TradingStrategy {
       logger.info(`🏆 Multi-Timeframe CE Signal: Confluence=${confluenceScore.toFixed(0)}%, All TF aligned, Vol=${volatility.isExpanding}`);
     } else if (mtfPEMet) {
       const strike = this.calculateOptimalStrike(currentPrice, indexName, 'PE');
-      const baseConfidence = 85;
-      const confluenceBonus = Math.min(10, (confluenceScore - 80) / 2);
-      const volatilityBonus = volatility.isExpanding ? 5 : 0;
+      const baseConfidence = 80;
+      const confluenceBonus = Math.min(15, (confluenceScore - 60) / 2);
+      const trendBonus = mtfPEConditions.trend_alignment ? 5 : 0;
       
       signal = {
         indexName,
@@ -278,7 +276,7 @@ class TradingStrategy {
         entryPrice: 0,
         target: 0,
         stopLoss: 0,
-        confidence: Math.min(98, baseConfidence + confluenceBonus + volatilityBonus),
+        confidence: Math.min(98, baseConfidence + confluenceBonus + trendBonus),
         timestamp: new Date(),
         technicals: {
           ema: 0,
@@ -305,20 +303,20 @@ class TradingStrategy {
     const bollinger = this.calculateBollingerBands(prices, 20, 2);
     const momentum = this.calculateMomentum(prices, 10);
 
-    // Strategy 1 Conditions: Bollinger Squeeze + RSI Divergence
+    // RELAXED Strategy 1 Conditions: Bollinger Bands + RSI (No squeeze required)
     const bollingerCEConditions = {
-      volatility_squeeze: bollinger.squeeze, // Low volatility = breakout likely
-      price_near_lower: currentPrice <= bollinger.lower * 1.005, // Near or below lower band
-      rsi_oversold_recovery: rsi > 30 && rsi < 50, // RSI recovering from oversold
-      positive_momentum: momentum > 0.1, // Slight upward momentum
+      price_near_lower_or_oversold: currentPrice <= bollinger.lower * 1.01 || rsi < 35, // Near lower band OR oversold
+      rsi_recovery_zone: rsi > 30 && rsi < 60, // Wider RSI range
+      trend_support: currentPrice > bollinger.middle * 0.995, // Above or near middle band
+      momentum_positive: momentum > 0.05, // Lower momentum requirement
       time_filter: this.isWithinTradingHours(indexName)
     };
 
     const bollingerPEConditions = {
-      volatility_squeeze: bollinger.squeeze,
-      price_near_upper: currentPrice >= bollinger.upper * 0.995, // Near or above upper band
-      rsi_overbought_decline: rsi < 70 && rsi > 50, // RSI declining from overbought
-      negative_momentum: momentum < -0.1, // Slight downward momentum
+      price_near_upper_or_overbought: currentPrice >= bollinger.upper * 0.99 || rsi > 65, // Near upper band OR overbought
+      rsi_decline_zone: rsi < 70 && rsi > 40, // Wider RSI range
+      trend_resistance: currentPrice < bollinger.middle * 1.005, // Below or near middle band
+      momentum_negative: momentum < -0.05, // Lower momentum requirement
       time_filter: this.isWithinTradingHours(indexName)
     };
 
@@ -328,9 +326,9 @@ class TradingStrategy {
     // Log strategy 1 analysis every 15 seconds
     const shouldLogBollinger = Date.now() % 15000 < 1000;
     if (shouldLogBollinger || bollingerCEMet || bollingerPEMet) {
-      logger.info(`🎯 ${indexName} Bollinger+RSI Strategy Analysis:`);
-      logger.info(`   💰 Price: ${currentPrice} | BB Upper: ${bollinger.upper.toFixed(2)} | Lower: ${bollinger.lower.toFixed(2)}`);
-      logger.info(`   📊 RSI: ${rsi.toFixed(2)} | Momentum: ${momentum.toFixed(2)}% | Squeeze: ${bollinger.squeeze}`);
+      logger.info(`🎯 ${indexName} Bollinger+RSI Strategy (RELAXED):`);
+      logger.info(`   💰 Price: ${currentPrice} | BB Upper: ${bollinger.upper.toFixed(2)} | Middle: ${bollinger.middle.toFixed(2)} | Lower: ${bollinger.lower.toFixed(2)}`);
+      logger.info(`   📊 RSI: ${rsi.toFixed(2)} | Momentum: ${momentum.toFixed(2)}%`);
       logger.info(`   📈 CE: ${Object.values(bollingerCEConditions).filter(c => c === true).length}/5 | PE: ${Object.values(bollingerPEConditions).filter(c => c === true).length}/5`);
       
       // Emit detailed analysis for Telegram
@@ -421,20 +419,18 @@ class TradingStrategy {
     const supportResistance = this.calculateSupportResistance(prices);
     const momentum = this.calculateMomentum(prices, 5); // Shorter period for faster signals
 
-    // Strategy 2: Support/Resistance Bounce + Momentum
+    // RELAXED Strategy 2: Price Action + Momentum (More practical)
     const priceActionCEConditions = {
-      support_bounce: supportResistance.nearSupport && momentum > 0.2, // Bouncing off support
-      rsi_bullish: rsi > 45 && rsi < 70, // RSI in bullish zone but not overbought
-      above_sma: currentPrice > sma * 0.998, // Above or near SMA
-      strong_momentum: momentum > 0.3, // Strong upward momentum
+      price_momentum_bullish: momentum > 0.1 && rsi > 45, // Basic bullish momentum + RSI
+      trend_bullish: currentPrice > sma || rsi > 55, // Either above SMA OR strong RSI
+      not_overbought: rsi < 75, // Not extremely overbought
       time_filter: this.isWithinTradingHours(indexName)
     };
 
     const priceActionPEConditions = {
-      resistance_rejection: supportResistance.nearResistance && momentum < -0.2, // Rejecting at resistance
-      rsi_bearish: rsi < 55 && rsi > 30, // RSI in bearish zone but not oversold
-      below_sma: currentPrice < sma * 1.002, // Below or near SMA
-      strong_momentum: momentum < -0.3, // Strong downward momentum
+      price_momentum_bearish: momentum < -0.1 && rsi < 55, // Basic bearish momentum + RSI
+      trend_bearish: currentPrice < sma || rsi < 45, // Either below SMA OR weak RSI
+      not_oversold: rsi > 25, // Not extremely oversold
       time_filter: this.isWithinTradingHours(indexName)
     };
 
@@ -444,10 +440,10 @@ class TradingStrategy {
     // Log strategy 2 analysis every 15 seconds
     const shouldLogAction = Date.now() % 15000 < 1000;
     if (shouldLogAction || actionCEMet || actionPEMet) {
-      logger.info(`🔍 ${indexName} Price Action Strategy:`);
-      logger.info(`   💰 Price: ${currentPrice} | Support: ${supportResistance.support.toFixed(2)} | Resistance: ${supportResistance.resistance.toFixed(2)}`);
-      logger.info(`   📊 RSI: ${rsi.toFixed(2)} | SMA: ${sma.toFixed(2)} | Momentum: ${momentum.toFixed(2)}%`);
-      logger.info(`   📈 CE: ${Object.values(priceActionCEConditions).filter(c => c === true).length}/5 | PE: ${Object.values(priceActionPEConditions).filter(c => c === true).length}/5`);
+      logger.info(`🚀 ${indexName} Price Action Strategy (RELAXED):`);
+      logger.info(`   💰 Price: ${currentPrice} | SMA: ${sma.toFixed(2)}`);
+      logger.info(`   📊 RSI: ${rsi.toFixed(2)} | Momentum: ${momentum.toFixed(2)}%`);
+      logger.info(`   📈 CE: ${Object.values(priceActionCEConditions).filter(c => c === true).length}/4 | PE: ${Object.values(priceActionPEConditions).filter(c => c === true).length}/4`);
     }
 
     let signal: TradingSignal | null = null;
