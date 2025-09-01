@@ -71,20 +71,20 @@ class TelegramBotService {
     // (process as any).on('strategyAnalysis', strategyAnalysisHandler);
     // this.eventListeners.push({ event: 'strategyAnalysis', handler: strategyAnalysisHandler });
 
-    // Listen for system health updates
-    const systemHealthHandler = async (data: { status: string, message: string }) => {
-      await this.sendSystemHealth(data.status, data.message);
-    };
-    (process as any).on('systemHealth', systemHealthHandler);
-    this.eventListeners.push({ event: 'systemHealth', handler: systemHealthHandler });
+    // System health events disabled - user preference
+    // const systemHealthHandler = async (data: { status: string, message: string }) => {
+    //   await this.sendSystemHealth(data.status, data.message);
+    // };
+    // (process as any).on('systemHealth', systemHealthHandler);
+    // this.eventListeners.push({ event: 'systemHealth', handler: systemHealthHandler });
 
-    // Listen for WebSocket status changes
-    const websocketStatusHandler = async (data: { status: string, message: string }) => {
-      logger.info(`🔗 WebSocket status change: ${data.status}`);
-      await this.sendWebSocketStatus(data.status, data.message);
-    };
-    (process as any).on('websocketStatus', websocketStatusHandler);
-    this.eventListeners.push({ event: 'websocketStatus', handler: websocketStatusHandler });
+    // WebSocket status events disabled - user preference
+    // const websocketStatusHandler = async (data: { status: string, message: string }) => {
+    //   logger.info(`🔗 WebSocket status change: ${data.status}`);
+    //   await this.sendWebSocketStatus(data.status, data.message);
+    // };
+    // (process as any).on('websocketStatus', websocketStatusHandler);
+    // this.eventListeners.push({ event: 'websocketStatus', handler: websocketStatusHandler });
 
     logger.info('📱 Telegram bot initialized with comprehensive event monitoring');
   }
