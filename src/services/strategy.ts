@@ -24,6 +24,7 @@ interface PriceBuffers {
 
 class TradingStrategy {
   private lastSignalTime: { [key: string]: number } = {}; // Changed to track per signal type
+  private cleanupInterval: NodeJS.Timeout | null = null;
   public priceBuffers: PriceBuffers = {
     NIFTY: [],
     BANKNIFTY: []
@@ -32,6 +33,9 @@ class TradingStrategy {
 
   public async initialize(): Promise<void> {
     logger.info('🎯 Trading strategy initializing...');
+
+    // Start cleanup mechanism for old signal times (every hour)
+    this.startCleanupProcess();
 
     // Subscribe to real-time price updates
     webSocketFeed.addSubscriber((indexName: string, priceUpdate: PriceUpdate) => {
@@ -331,26 +335,26 @@ class TradingStrategy {
       logger.info(`   📊 RSI: ${rsi.toFixed(2)} | Momentum: ${momentum.toFixed(2)}%`);
       logger.info(`   📈 CE: ${Object.values(bollingerCEConditions).filter(c => c === true).length}/5 | PE: ${Object.values(bollingerPEConditions).filter(c => c === true).length}/5`);
       
-      // Emit detailed analysis for Telegram
-      if (shouldLogBollinger && Date.now() % 60000 < 1000) { // Every minute
-        (process as any).emit('strategyAnalysis', {
-          indexName,
-          analysis: {
-            type: 'Bollinger+RSI',
-            currentPrice,
-            rsi: rsi,
-            bollinger: {
-              upper: bollinger.upper,
-              lower: bollinger.lower,
-              squeeze: bollinger.squeeze,
-              ready: Object.values(bollingerCEConditions).filter(c => c === true).length >= 3 || 
-                     Object.values(bollingerPEConditions).filter(c => c === true).length >= 3
-            },
-            momentum: momentum,
-            volatility: { isExpanding: false }
-          }
-        });
-      }
+      // Strategy Analysis Update disabled for Telegram - user preference
+      // if (shouldLogBollinger && Date.now() % 60000 < 1000) { // Every minute
+      //   (process as any).emit('strategyAnalysis', {
+      //     indexName,
+      //     analysis: {
+      //       type: 'Bollinger+RSI',
+      //       currentPrice,
+      //       rsi: rsi,
+      //       bollinger: {
+      //         upper: bollinger.upper,
+      //         lower: bollinger.lower,
+      //         squeeze: bollinger.squeeze,
+      //         ready: Object.values(bollingerCEConditions).filter(c => c === true).length >= 3 || 
+      //                Object.values(bollingerPEConditions).filter(c => c === true).length >= 3
+      //       },
+      //       momentum: momentum,
+      //       volatility: { isExpanding: false }
+      //     }
+      //   });
+      // }
     }
 
     let signal: TradingSignal | null = null;
@@ -1003,6 +1007,40 @@ class TradingStrategy {
     } catch (error) {
       logger.error('Error in getCurrentMarketConditions:', (error as Error).message);
       return '\n📊 Current Market Conditions: Error retrieving data\n';
+    }
+  }
+
+  private startCleanupProcess(): void {
+    // Clean up old signal times every hour to prevent memory growth
+    this.cleanupInterval = setInterval(() => {
+      this.cleanupOldSignalTimes();
+    }, 60 * 60 * 1000); // Every hour
+    
+    logger.info('🧹 Strategy cleanup process started (hourly signal time cleanup)');
+  }
+
+  private cleanupOldSignalTimes(): void {
+    const now = Date.now();
+    const dayAgo = now - (24 * 60 * 60 * 1000); // 24 hours ago
+    let cleanedCount = 0;
+    
+    Object.keys(this.lastSignalTime).forEach(key => {
+      if (this.lastSignalTime[key] < dayAgo) {
+        delete this.lastSignalTime[key];
+        cleanedCount++;
+      }
+    });
+    
+    if (cleanedCount > 0) {
+      logger.info(`🧹 Cleaned up ${cleanedCount} old signal times older than 24 hours`);
+    }
+  }
+
+  public stop(): void {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = null;
+      logger.info('🧹 Strategy cleanup process stopped');
     }
   }
 }

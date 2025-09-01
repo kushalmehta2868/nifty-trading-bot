@@ -33,14 +33,18 @@ class OrderService {
   private dailyTrades = 0;
   private dailyPnL = 0;
   private monitoringInterval: NodeJS.Timeout | null = null;
+  private tradingSignalHandler?: (signal: TradingSignal) => Promise<void>;
 
   public async initialize(): Promise<void> {
-    // Listen for trading signals to place orders
-    (process as any).on('tradingSignal', async (signal: TradingSignal) => {
+    // Store the handler reference for cleanup
+    this.tradingSignalHandler = async (signal: TradingSignal) => {
       if (config.trading.autoTrade) {
         await this.processSignal(signal);
       }
-    });
+    };
+    
+    // Listen for trading signals to place orders
+    (process as any).on('tradingSignal', this.tradingSignalHandler);
 
     // Start monitoring active orders
     this.startOrderMonitoring();
@@ -769,6 +773,11 @@ ${pnlColor} *P&L:* ₹${order.pnl?.toFixed(2)}
   }
 
   public stopMonitoring(): void {
+    // Remove the event listener to prevent memory leak
+    if (this.tradingSignalHandler) {
+      (process as any).removeListener('tradingSignal', this.tradingSignalHandler);
+    }
+    
     if (this.monitoringInterval) {
       clearInterval(this.monitoringInterval);
       this.monitoringInterval = null;

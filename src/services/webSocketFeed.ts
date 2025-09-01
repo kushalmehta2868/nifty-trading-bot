@@ -255,6 +255,13 @@ class WebSocketFeed {
     this.subscribers.push(callback);
   }
 
+  public removeSubscriber(callback: PriceSubscriber): void {
+    const index = this.subscribers.indexOf(callback);
+    if (index > -1) {
+      this.subscribers.splice(index, 1);
+    }
+  }
+
   private notifySubscribers(indexName: IndexName, priceUpdate: PriceUpdate): void {
     this.subscribers.forEach(callback => {
       try {
@@ -382,6 +389,9 @@ class WebSocketFeed {
       clearTimeout(this.reconnectTimeout);
       this.reconnectTimeout = null;
     }
+
+    // Clear all subscribers to prevent memory leaks
+    this.subscribers = [];
 
     if (this.ws) {
       this.ws.close();

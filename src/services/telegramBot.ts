@@ -8,6 +8,7 @@ class TelegramBotService {
   private bot: TelegramBot | null = null;
   private chatId: string = '';
   private signalsToday = 0;
+  private eventListeners: Array<{ event: string; handler: Function }> = [];
 
   constructor() {
     if (config.telegram.botToken) {
@@ -23,51 +24,67 @@ class TelegramBotService {
     if (!this.bot) return;
 
     // Listen for trading signals
-    (process as any).on('tradingSignal', async (signal: TradingSignal) => {
+    const tradingSignalHandler = async (signal: TradingSignal) => {
       logger.info(`📱 Preparing to send Telegram signal: ${signal.indexName} ${signal.optionType} (Confidence: ${signal.confidence.toFixed(1)}%)`);
       await this.sendTradingSignal(signal);
       this.signalsToday++;
       logger.info(`📊 Today's signals count: ${this.signalsToday}`);
-    });
+    };
+    (process as any).on('tradingSignal', tradingSignalHandler);
+    this.eventListeners.push({ event: 'tradingSignal', handler: tradingSignalHandler });
 
     // Listen for order placement confirmations
-    (process as any).on('orderPlaced', async (data: { signal: any, orderId: string, isPaperTrade?: boolean }) => {
+    const orderPlacedHandler = async (data: { signal: any, orderId: string, isPaperTrade?: boolean }) => {
       const tradeType = data.isPaperTrade ? '📄 Paper' : '💰 Real';
       const message = `✅ *ORDER PLACED* ${tradeType}\n📋 *Order ID:* ${data.orderId}\n📈 *Symbol:* ${data.signal.optionSymbol}\n⏰ *Time:* ${new Date().toLocaleTimeString()}`;
       await this.sendMessage(message);
-    });
+    };
+    (process as any).on('orderPlaced', orderPlacedHandler);
+    this.eventListeners.push({ event: 'orderPlaced', handler: orderPlacedHandler });
 
     // Listen for order fills (entry executed)
-    (process as any).on('orderFilled', async (data: { order: any, message: string }) => {
+    const orderFilledHandler = async (data: { order: any, message: string }) => {
       await this.sendMessage(data.message);
-    });
+    };
+    (process as any).on('orderFilled', orderFilledHandler);
+    this.eventListeners.push({ event: 'orderFilled', handler: orderFilledHandler });
 
     // Listen for order exits (target/SL hit)
-    (process as any).on('orderExited', async (data: { order: any, message: string }) => {
+    const orderExitedHandler = async (data: { order: any, message: string }) => {
       await this.sendMessage(data.message);
-    });
+    };
+    (process as any).on('orderExited', orderExitedHandler);
+    this.eventListeners.push({ event: 'orderExited', handler: orderExitedHandler });
 
     // Listen for balance insufficient alerts
-    (process as any).on('balanceInsufficient', async (data: { signal: any, message: string }) => {
+    const balanceInsufficientHandler = async (data: { signal: any, message: string }) => {
       logger.warn('💸 Insufficient balance detected, sending alert');
       await this.sendMessage(data.message);
-    });
+    };
+    (process as any).on('balanceInsufficient', balanceInsufficientHandler);
+    this.eventListeners.push({ event: 'balanceInsufficient', handler: balanceInsufficientHandler });
 
-    // Listen for strategy analysis events
-    (process as any).on('strategyAnalysis', async (data: { indexName: string, analysis: any }) => {
-      await this.sendStrategyAnalysis(data.indexName, data.analysis);
-    });
+    // Strategy analysis events disabled - user preference
+    // const strategyAnalysisHandler = async (data: { indexName: string, analysis: any }) => {
+    //   await this.sendStrategyAnalysis(data.indexName, data.analysis);
+    // };
+    // (process as any).on('strategyAnalysis', strategyAnalysisHandler);
+    // this.eventListeners.push({ event: 'strategyAnalysis', handler: strategyAnalysisHandler });
 
     // Listen for system health updates
-    (process as any).on('systemHealth', async (data: { status: string, message: string }) => {
+    const systemHealthHandler = async (data: { status: string, message: string }) => {
       await this.sendSystemHealth(data.status, data.message);
-    });
+    };
+    (process as any).on('systemHealth', systemHealthHandler);
+    this.eventListeners.push({ event: 'systemHealth', handler: systemHealthHandler });
 
     // Listen for WebSocket status changes
-    (process as any).on('websocketStatus', async (data: { status: string, message: string }) => {
+    const websocketStatusHandler = async (data: { status: string, message: string }) => {
       logger.info(`🔗 WebSocket status change: ${data.status}`);
       await this.sendWebSocketStatus(data.status, data.message);
-    });
+    };
+    (process as any).on('websocketStatus', websocketStatusHandler);
+    this.eventListeners.push({ event: 'websocketStatus', handler: websocketStatusHandler });
 
     logger.info('📱 Telegram bot initialized with comprehensive event monitoring');
   }
@@ -405,6 +422,15 @@ ${status === 'connected' ? '✅ Live data streaming resumed' : '⚠️ Switching
     } catch (error) {
       logger.error('Failed to send daily summary:', (error as Error).message);
     }
+  }
+
+  public cleanup(): void {
+    // Remove all event listeners to prevent memory leaks
+    this.eventListeners.forEach(({ event, handler }) => {
+      (process as any).removeListener(event, handler);
+    });
+    this.eventListeners = [];
+    logger.info('📱 Telegram bot event listeners cleaned up');
   }
 }
 

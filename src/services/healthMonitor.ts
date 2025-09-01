@@ -90,8 +90,10 @@ class HealthMonitor {
     
     // System memory
     const memoryUsage = process.memoryUsage();
-    const memoryUsedMB = Math.round(memoryUsage.heapUsed / 1024 / 1024);
-    const memoryPercentage = Math.round((memoryUsage.heapUsed / memoryUsage.heapTotal) * 100);
+    const memoryUsedMB = Math.round(memoryUsage.rss / 1024 / 1024); // Use RSS (Resident Set Size) instead of heapUsed
+    // Calculate percentage based on a reasonable baseline (e.g., 200MB for a trading bot)
+    const memoryBaseline = 200; // MB - reasonable limit for a trading bot
+    const memoryPercentage = Math.min(100, Math.round((memoryUsedMB / memoryBaseline) * 100));
     
     return {
       webSocket: {
