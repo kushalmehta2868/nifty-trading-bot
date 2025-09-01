@@ -3,6 +3,7 @@ import { webSocketFeed } from './webSocketFeed';
 import { strategy } from './strategy';
 import { orderService } from './orderService';
 import { config } from '../config/config';
+import { isMarketOpen } from '../utils/marketHours';
 
 interface SystemHealth {
   webSocket: {
@@ -91,8 +92,8 @@ class HealthMonitor {
     // System memory
     const memoryUsage = process.memoryUsage();
     const memoryUsedMB = Math.round(memoryUsage.rss / 1024 / 1024); // Use RSS (Resident Set Size) instead of heapUsed
-    // Calculate percentage based on a reasonable baseline (e.g., 200MB for a trading bot)
-    const memoryBaseline = 200; // MB - reasonable limit for a trading bot
+    // Calculate percentage based on a reasonable baseline (300MB is more realistic for trading bot)
+    const memoryBaseline = 300; // MB - reasonable limit for a trading bot with WebSocket and API calls
     const memoryPercentage = Math.min(100, Math.round((memoryUsedMB / memoryBaseline) * 100));
     
     return {
@@ -124,34 +125,42 @@ class HealthMonitor {
   private analyzeHealth(health: SystemHealth): Array<{ severity: 'warning' | 'critical', message: string }> {
     const issues: Array<{ severity: 'warning' | 'critical', message: string }> = [];
     
-    // WebSocket health
-    if (!health.webSocket.connected) {
+    // WebSocket health - Only check during market hours
+    if (isMarketOpen()) {
+      if (!health.webSocket.connected) {
+        issues.push({
+          severity: 'critical',
+          message: 'WebSocket disconnected during market hours - no live data'
+        });
+      } else if (!health.webSocket.healthy) {
+        issues.push({
+          severity: 'warning', 
+          message: 'WebSocket connection unstable during market hours'
+        });
+      }
+    }
+    // Outside market hours, WebSocket disconnection is expected and not an issue
+    
+    // Data buffer health - Only warn if critically low
+    if (health.strategy.bufferSizes.NIFTY < 5 && health.strategy.bufferSizes.BANKNIFTY < 5) {
       issues.push({
         severity: 'critical',
-        message: 'WebSocket disconnected - no live data'
+        message: 'No price data available for analysis'
       });
-    } else if (!health.webSocket.healthy) {
-      issues.push({
-        severity: 'warning', 
-        message: 'WebSocket connection unstable'
-      });
-    }
-    
-    // Data buffer health
-    if (health.strategy.bufferSizes.NIFTY < 20 || health.strategy.bufferSizes.BANKNIFTY < 20) {
+    } else if (health.strategy.bufferSizes.NIFTY < 10 || health.strategy.bufferSizes.BANKNIFTY < 10) {
       issues.push({
         severity: 'warning',
-        message: 'Insufficient price data for analysis'
+        message: 'Limited price data - building buffer'
       });
     }
     
-    // Memory health
-    if (health.memory.percentage > 85) {
+    // Memory health - More reasonable thresholds
+    if (health.memory.percentage > 90) {
       issues.push({
         severity: 'critical',
         message: `High memory usage: ${health.memory.percentage}%`
       });
-    } else if (health.memory.percentage > 70) {
+    } else if (health.memory.percentage > 80) {
       issues.push({
         severity: 'warning',
         message: `Elevated memory usage: ${health.memory.percentage}%`
