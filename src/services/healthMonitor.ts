@@ -30,6 +30,7 @@ interface SystemHealth {
 class HealthMonitor {
   private monitorInterval: NodeJS.Timeout | null = null;
   private lastHealthCheck = 0;
+  private consecutiveUnstableConnections = 0;
 
   public async initialize(): Promise<void> {
     logger.info('🏥 Health Monitor initializing...');
@@ -125,19 +126,28 @@ class HealthMonitor {
   private analyzeHealth(health: SystemHealth): Array<{ severity: 'warning' | 'critical', message: string }> {
     const issues: Array<{ severity: 'warning' | 'critical', message: string }> = [];
     
-    // WebSocket health - Only check during market hours
+    // WebSocket health - Only check during market hours with consecutive failure detection
     if (isMarketOpen()) {
       if (!health.webSocket.connected) {
         issues.push({
           severity: 'critical',
           message: 'WebSocket disconnected during market hours - no live data'
         });
+        this.consecutiveUnstableConnections = 0; // Reset counter
       } else if (!health.webSocket.healthy) {
-        issues.push({
-          severity: 'warning', 
-          message: 'WebSocket connection unstable during market hours'
-        });
+        this.consecutiveUnstableConnections++;
+        // Only report as unstable after 3 consecutive checks (90 seconds)
+        if (this.consecutiveUnstableConnections >= 3) {
+          issues.push({
+            severity: 'warning', 
+            message: 'WebSocket connection persistently unstable during market hours'
+          });
+        }
+      } else {
+        this.consecutiveUnstableConnections = 0; // Reset counter when healthy
       }
+    } else {
+      this.consecutiveUnstableConnections = 0; // Reset counter outside market hours
     }
     // Outside market hours, WebSocket disconnection is expected and not an issue
     

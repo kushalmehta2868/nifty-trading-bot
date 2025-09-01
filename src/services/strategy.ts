@@ -235,6 +235,16 @@ class TradingStrategy {
       logger.info(`   📊 RSI: 1t=${rsi1.toFixed(1)} | 5t=${rsi5.toFixed(1)} | 10t=${rsi10.toFixed(1)}`);
       logger.info(`   📈 Momentum: 1t=${momentum1.toFixed(2)}% | 5t=${momentum5.toFixed(2)}% | 10t=${momentum10.toFixed(2)}%`);
       logger.info(`   🎯 CE: ${Object.values(mtfCEConditions).filter(c => c === true).length}/5 | PE: ${Object.values(mtfPEConditions).filter(c => c === true).length}/5`);
+      
+      // Show CE condition status
+      if (Object.values(mtfCEConditions).filter(c => c === true).length < 5) {
+        logger.info(`   📋 CE Missing: ${mtfCEConditions.majority_rsi_bullish ? '' : 'RSI-Majority '} ${mtfCEConditions.trend_alignment ? '' : 'Trend '} ${mtfCEConditions.momentum_positive ? '' : 'Momentum '} ${mtfCEConditions.decent_confluence ? '' : 'Confluence '} ${mtfCEConditions.time_filter ? '' : 'Time'}`);
+      }
+      
+      // Show PE condition status
+      if (Object.values(mtfPEConditions).filter(c => c === true).length < 5) {
+        logger.info(`   📋 PE Missing: ${mtfPEConditions.majority_rsi_bearish ? '' : 'RSI-Majority '} ${mtfPEConditions.trend_alignment ? '' : 'Trend '} ${mtfPEConditions.momentum_negative ? '' : 'Momentum '} ${mtfPEConditions.decent_confluence ? '' : 'Confluence '} ${mtfPEConditions.time_filter ? '' : 'Time'}`);
+      }
     }
 
     let signal: TradingSignal | null = null;
@@ -334,6 +344,16 @@ class TradingStrategy {
       logger.info(`   💰 Price: ${currentPrice} | BB Upper: ${bollinger.upper.toFixed(2)} | Middle: ${bollinger.middle.toFixed(2)} | Lower: ${bollinger.lower.toFixed(2)}`);
       logger.info(`   📊 RSI: ${rsi.toFixed(2)} | Momentum: ${momentum.toFixed(2)}%`);
       logger.info(`   📈 CE: ${Object.values(bollingerCEConditions).filter(c => c === true).length}/5 | PE: ${Object.values(bollingerPEConditions).filter(c => c === true).length}/5`);
+      
+      // Show CE condition status
+      if (Object.values(bollingerCEConditions).filter(c => c === true).length < 5) {
+        logger.info(`   📋 CE Missing: ${bollingerCEConditions.price_near_lower_or_oversold ? '' : 'Near-Lower '} ${bollingerCEConditions.rsi_recovery_zone ? '' : 'RSI-Zone '} ${bollingerCEConditions.trend_support ? '' : 'Support '} ${bollingerCEConditions.momentum_positive ? '' : 'Momentum '} ${bollingerCEConditions.time_filter ? '' : 'Time'}`);
+      }
+      
+      // Show PE condition status  
+      if (Object.values(bollingerPEConditions).filter(c => c === true).length < 5) {
+        logger.info(`   📋 PE Missing: ${bollingerPEConditions.price_near_upper_or_overbought ? '' : 'Near-Upper '} ${bollingerPEConditions.rsi_decline_zone ? '' : 'RSI-Zone '} ${bollingerPEConditions.trend_resistance ? '' : 'Resistance '} ${bollingerPEConditions.momentum_negative ? '' : 'Momentum '} ${bollingerPEConditions.time_filter ? '' : 'Time'}`);
+      }
       
       // Strategy Analysis Update disabled for Telegram - user preference
       // if (shouldLogBollinger && Date.now() % 60000 < 1000) { // Every minute
@@ -448,6 +468,16 @@ class TradingStrategy {
       logger.info(`   💰 Price: ${currentPrice} | SMA: ${sma.toFixed(2)}`);
       logger.info(`   📊 RSI: ${rsi.toFixed(2)} | Momentum: ${momentum.toFixed(2)}%`);
       logger.info(`   📈 CE: ${Object.values(priceActionCEConditions).filter(c => c === true).length}/4 | PE: ${Object.values(priceActionPEConditions).filter(c => c === true).length}/4`);
+      
+      // Show CE condition status
+      if (Object.values(priceActionCEConditions).filter(c => c === true).length < 4) {
+        logger.info(`   📋 CE Missing: ${priceActionCEConditions.price_momentum_bullish ? '' : 'Bullish-Momentum '} ${priceActionCEConditions.trend_bullish ? '' : 'Bullish-Trend '} ${priceActionCEConditions.not_overbought ? '' : 'Not-Overbought '} ${priceActionCEConditions.time_filter ? '' : 'Time'}`);
+      }
+      
+      // Show PE condition status
+      if (Object.values(priceActionPEConditions).filter(c => c === true).length < 4) {
+        logger.info(`   📋 PE Missing: ${priceActionPEConditions.price_momentum_bearish ? '' : 'Bearish-Momentum '} ${priceActionPEConditions.trend_bearish ? '' : 'Bearish-Trend '} ${priceActionPEConditions.not_oversold ? '' : 'Not-Oversold '} ${priceActionPEConditions.time_filter ? '' : 'Time'}`);
+      }
     }
 
     let signal: TradingSignal | null = null;

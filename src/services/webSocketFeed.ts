@@ -369,7 +369,8 @@ class WebSocketFeed {
 
   public isConnectionHealthy(): boolean {
     const timeSinceLastPong = Date.now() - this.lastPongReceived;
-    return this.isConnected && timeSinceLastPong < this.PING_INTERVAL * 2;
+    // More lenient: Allow up to 3x ping interval (90 seconds) before marking as unhealthy
+    return this.isConnected && timeSinceLastPong < this.PING_INTERVAL * 3;
   }
 
   public getConnectionStatus(): { connected: boolean; healthy: boolean; lastPong: number } {
