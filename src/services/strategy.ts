@@ -154,6 +154,10 @@ class TradingStrategy {
       return null;
     }
 
+    // Try TEST strategy first (for debugging)
+    const testSignal = await this.analyzeTestStrategy(indexName, currentPrice, prices);
+    if (testSignal) return testSignal;
+
     // Try Strategy 3 first (Multi-Timeframe Confluence) - Highest accuracy
     const confluenceSignal = await this.analyzeMultiTimeframeConfluence(indexName, currentPrice, prices);
     if (confluenceSignal) return confluenceSignal;
@@ -167,6 +171,97 @@ class TradingStrategy {
     if (priceActionSignal) return priceActionSignal;
 
     return null; // No signals from any strategy
+  }
+
+  // 🧪 TEST STRATEGY: Simple conditions for debugging
+  private async analyzeTestStrategy(
+    indexName: IndexName, 
+    currentPrice: number, 
+    prices: number[]
+  ): Promise<TradingSignal | null> {
+    if (prices.length < 10) return null; // Need at least 10 prices
+    
+    const rsi = this.calculateRSI(prices, 14);
+    const sma = this.calculateSMA(prices, 20);
+    const momentum = this.calculateMomentum(prices, 5);
+    
+    // VERY SIMPLE test conditions - should trigger easily
+    const testCEConditions = {
+      rsi_above_30: rsi > 30 && rsi < 70, // RSI in middle range
+      price_above_zero: currentPrice > 0, // Always true
+      time_filter: this.isWithinTradingHours(indexName)
+    };
+    
+    const testPEConditions = {
+      rsi_below_70: rsi > 30 && rsi < 70, // Same as above
+      price_above_zero: currentPrice > 0, // Always true
+      time_filter: this.isWithinTradingHours(indexName)
+    };
+    
+    const testCEMet = Object.values(testCEConditions).every(c => c === true);
+    const testPEMet = Object.values(testPEConditions).every(c => c === true);
+    
+    // Log every 30 seconds
+    const shouldLogTest = Date.now() % 30000 < 1000;
+    if (shouldLogTest) {
+      logger.info(`🧪 ${indexName} TEST Strategy (SIMPLE):`);
+      logger.info(`   💰 Price: ${currentPrice} | SMA: ${sma.toFixed(2)}`);
+      logger.info(`   📊 RSI: ${rsi.toFixed(2)} | Momentum: ${momentum.toFixed(2)}%`);
+      logger.info(`   🎯 CE: ${Object.values(testCEConditions).filter(c => c === true).length}/3 | PE: ${Object.values(testPEConditions).filter(c => c === true).length}/3`);
+      
+      // Show missing conditions
+      if (Object.values(testCEConditions).filter(c => c === true).length < 3) {
+        logger.info(`   📋 CE Missing: ${testCEConditions.rsi_above_30 ? '' : 'RSI-Range '} ${testCEConditions.price_above_zero ? '' : 'Price-Valid '} ${testCEConditions.time_filter ? '' : 'Time'}`);
+      }
+    }
+    
+    let signal: TradingSignal | null = null;
+    
+    if (testCEMet && rsi < 60) { // Slight preference for lower RSI
+      const strike = this.calculateOptimalStrike(currentPrice, indexName, 'CE');
+      signal = {
+        indexName,
+        direction: 'UP',
+        spotPrice: currentPrice,
+        optionType: 'CE',
+        optionSymbol: this.generateOptionSymbol(indexName, strike, 'CE'),
+        entryPrice: 0,
+        target: 0,
+        stopLoss: 0,
+        confidence: 75, // Lower confidence for test
+        timestamp: new Date(),
+        technicals: {
+          ema: 0,
+          rsi: parseFloat(rsi.toFixed(2)),
+          priceChange: parseFloat(momentum.toFixed(2)),
+          vwap: parseFloat(sma.toFixed(2))
+        }
+      };
+      logger.info(`🧪 TEST CE Signal Generated! RSI=${rsi.toFixed(2)}, Momentum=${momentum.toFixed(2)}%`);
+    } else if (testPEMet && rsi > 40) { // Slight preference for higher RSI
+      const strike = this.calculateOptimalStrike(currentPrice, indexName, 'PE');
+      signal = {
+        indexName,
+        direction: 'DOWN',
+        spotPrice: currentPrice,
+        optionType: 'PE',
+        optionSymbol: this.generateOptionSymbol(indexName, strike, 'PE'),
+        entryPrice: 0,
+        target: 0,
+        stopLoss: 0,
+        confidence: 75, // Lower confidence for test
+        timestamp: new Date(),
+        technicals: {
+          ema: 0,
+          rsi: parseFloat(rsi.toFixed(2)),
+          priceChange: parseFloat(momentum.toFixed(2)),
+          vwap: parseFloat(sma.toFixed(2))
+        }
+      };
+      logger.info(`🧪 TEST PE Signal Generated! RSI=${rsi.toFixed(2)}, Momentum=${momentum.toFixed(2)}%`);
+    }
+    
+    return signal;
   }
 
   // 🏆 STRATEGY 3: Multi-Timeframe Confluence (Highest Accuracy - 90%+)
