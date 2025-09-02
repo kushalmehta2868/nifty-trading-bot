@@ -39,7 +39,8 @@ class WebSocketFeed {
         throw new Error('Authentication failed');
       }
 
-      await angelAPI.testTokenLTP(); // Verify tokens work via REST
+      await angelAPI.debugAngelFormats();
+      // await angelAPI.testTokenLTP(); // Verify tokens work via REST
 
       // Try WebSocket first
       try {
@@ -414,7 +415,7 @@ class WebSocketFeed {
         // Poll all instruments via REST API
         for (const indexName of ['NIFTY', 'BANKNIFTY'] as IndexName[]) {
           const exchange = 'NSE';
-          
+
           const response = await angelAPI.makeRequest(
             '/rest/secure/angelbroking/market/v1/quote/',
             'POST',
@@ -429,13 +430,13 @@ class WebSocketFeed {
           if (response?.data?.fetched && response.data.fetched.length > 0) {
             const marketData = response.data.fetched[0];
             const price = parseFloat(marketData.ltp);
-            
+
             // Try different volume field names
             const volume = parseFloat(
-              marketData.volume || 
-              marketData.vol || 
-              marketData.totalTradedVolume || 
-              marketData.totaltradedvolume || 
+              marketData.volume ||
+              marketData.vol ||
+              marketData.totalTradedVolume ||
+              marketData.totaltradedvolume ||
               '0'
             );
 

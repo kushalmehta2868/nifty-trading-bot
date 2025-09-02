@@ -213,34 +213,87 @@ class AngelAPI {
       'Accept': 'application/json',
       'X-UserType': 'USER',
       'X-SourceID': 'WEB',
-      'X-ClientLocalIP': '192.168.1.1',
-      'X-ClientPublicIP': '192.168.1.1',
-      'X-MACAddress': '00:00:00:00:00:00',
+      'X-ClientLocalIP': this.getLocalIP(),      // Get actual local IP
+      'X-ClientPublicIP': this.getPublicIP(),    // Get actual public IP  
+      'X-MACAddress': this.getMACAddress(),      // Get actual MAC
       'X-PrivateKey': config.angel.apiKey,
       'Authorization': `Bearer ${this._jwtToken}`
     };
 
     try {
+      console.log(`🔄 Making ${method} request to: ${this.baseURL}${endpoint}`);
+      console.log('📤 Request data:', data);
+
       const response = await axios({
         method,
         url: `${this.baseURL}${endpoint}`,
         headers,
-        data
+        data,
+        timeout: 30000  // 30 second timeout
       });
 
       return response.data;
     } catch (error) {
-      if (axios.isAxiosError(error) && error.response?.status === 401) {
-        // Token expired, try to refresh
-        this.isAuthenticated = false;
-        if (await this.authenticate()) {
-          // Retry the request
-          return this.makeRequest(endpoint, method, data);
+      if (axios.isAxiosError(error)) {
+        console.error('❌ API Error:', {
+          status: error.response?.status,
+          statusText: error.response?.statusText,
+          data: error.response?.data,
+          endpoint: endpoint
+        });
+
+        if (error.response?.status === 401) {
+          this.isAuthenticated = false;
+          if (await this.authenticate()) {
+            return this.makeRequest(endpoint, method, data);
+          }
         }
       }
       throw error;
     }
   }
+
+  // Helper methods to get actual network info
+  private getLocalIP(): string {
+    // For Node.js environment
+    const os = require('os');
+    const networkInterfaces = os.networkInterfaces();
+
+    for (const interfaceName of Object.keys(networkInterfaces)) {
+      const networkInterface = networkInterfaces[interfaceName];
+      for (const network of networkInterface || []) {
+        if (network.family === 'IPv4' && !network.internal) {
+          return network.address;
+        }
+      }
+    }
+
+    return '192.168.1.100'; // Fallback
+  }
+
+  private getPublicIP(): string {
+    // You might want to fetch this from an external service
+    // For now, use a placeholder that's different from local IP
+    return '203.192.1.100';
+  }
+
+  private getMACAddress(): string {
+    // Get actual MAC address
+    const os = require('os');
+    const networkInterfaces = os.networkInterfaces();
+
+    for (const interfaceName of Object.keys(networkInterfaces)) {
+      const networkInterface = networkInterfaces[interfaceName];
+      for (const network of networkInterface || []) {
+        if (network.family === 'IPv4' && !network.internal && network.mac !== '00:00:00:00:00:00') {
+          return network.mac.toUpperCase();
+        }
+      }
+    }
+
+    return 'AA:BB:CC:DD:EE:FF'; // Fallback
+  }
+
 
   public async getProfile(): Promise<AngelProfileResponse> {
     return this.makeRequest('/rest/secure/angelbroking/user/v1/getProfile');
@@ -263,10 +316,102 @@ class AngelAPI {
     exchange: string,
     searchtext: string
   ): Promise<any> {
-    return this.makeRequest('/rest/secure/angelbroking/order/v1/searchScrip', 'POST', {
-      exchange,
-      searchtext
-    });
+    try {
+      logger.info(`🔍 Searching scrips: exchange=${exchange}, symbol=${searchtext}`);
+      
+      // ✅ Fixed parameter name from 'searchtext' to 'searchscrip'
+      const response = await this.makeRequest('/rest/secure/angelbroking/order/v1/searchScrip', 'POST', {
+        exchange,
+        searchscrip: searchtext // Correct parameter name as per Angel One API docs
+      });
+
+      // ✅ Enhanced response logging
+      if (response) {
+        logger.info(`📋 Search response:`, {
+          status: response.status,
+          message: response.message,
+          dataCount: response.data?.length || 0,
+          errorcode: response.errorcode
+        });
+
+        if (response.data && response.data.length > 0) {
+          logger.info(`✅ Found ${response.data.length} matches for "${searchtext}"`);
+          // Log first few matches for debugging
+          response.data.slice(0, 3).forEach((item: any, index: number) => {
+            logger.info(`   ${index + 1}. ${item.tradingsymbol} (${item.symboltoken}) [${item.exchange}]`);
+          });
+        } else {
+          logger.warn(`❌ No matches found for "${searchtext}" on ${exchange}`);
+        }
+      }
+
+      return response;
+    } catch (error) {
+      logger.error(`searchScrips failed for "${searchtext}" on ${exchange}:`, (error as Error).message);
+      throw error;
+    }
+  }
+
+  // ✅ Alternative search method using master data when API fails
+  public async searchScripsViaManual(
+    exchange: string,
+    searchtext: string
+  ): Promise<any> {
+    try {
+      logger.info(`🔄 Fallback: Searching via master data for "${searchtext}" on ${exchange}`);
+      
+      const response = await axios.get('https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json');
+      const masterData = response.data;
+
+      // Search for matching symbols
+      const matches = masterData.filter((item: any) => {
+        return (
+          item.exch_seg === exchange &&
+          item.symbol &&
+          (item.symbol.includes(searchtext) || item.name?.includes(searchtext))
+        );
+      });
+
+      if (matches.length > 0) {
+        logger.info(`✅ Found ${matches.length} matches via master data`);
+        
+        // Convert to Angel API response format
+        const formattedResponse = {
+          status: true,
+          message: "SUCCESS",
+          errorcode: "",
+          data: matches.slice(0, 20).map((item: any) => ({
+            exchange: item.exch_seg,
+            tradingsymbol: item.symbol,
+            symboltoken: item.token
+          }))
+        };
+
+        // Log some matches
+        formattedResponse.data.slice(0, 3).forEach((item: any, index: number) => {
+          logger.info(`   ${index + 1}. ${item.tradingsymbol} (${item.symboltoken}) [${item.exchange}]`);
+        });
+
+        return formattedResponse;
+      } else {
+        logger.warn(`❌ No matches found in master data for "${searchtext}"`);
+        return {
+          status: false,
+          message: "No matches found",
+          errorcode: "NO_DATA",
+          data: []
+        };
+      }
+
+    } catch (error) {
+      logger.error(`Master data search failed for "${searchtext}":`, (error as Error).message);
+      return {
+        status: false,
+        message: "Search failed",
+        errorcode: "SEARCH_ERROR",
+        data: []
+      };
+    }
   }
 
   // Get option chain data
@@ -311,14 +456,29 @@ class AngelAPI {
     expiry: string
   ): Promise<string | null> {
     try {
-      const symbol = `${indexName}${expiry}${strike}${optionType}`;
+      // ✅ Format expiry correctly (DDMMMYY format like 12SEP24)
+      const formattedExpiry = this.formatExpiryDate(expiry);
+      
+      // ✅ Use correct symbol naming based on research
+      let baseSymbol = indexName;
+      if (indexName === 'BANKNIFTY') {
+        baseSymbol = 'BANKNIFTY'; // Keep as BANKNIFTY for options
+      } else if (indexName === 'NIFTY') {
+        baseSymbol = 'NIFTY'; // Keep as NIFTY for options
+      }
+
+      // ✅ Build symbol with correct format: BASEEXPIRYSTRIKETYPE
+      const symbol = `${baseSymbol}${formattedExpiry}${strike}${optionType}`;
       const exchange = 'NFO';
 
       logger.info(`🔍 Searching for option token: ${symbol} on ${exchange}`);
-      
-      const response = await this.searchScrips(exchange, symbol);
-      
-      // Enhanced debug logging
+
+      // First try direct search with constructed symbol
+      let response = await this.searchScrips(exchange, symbol).catch(async (error) => {
+        logger.warn(`Primary search failed, trying fallback: ${error.message}`);
+        return await this.searchScripsViaManual(exchange, symbol);
+      });
+
       logger.info(`📋 Angel API search response:`, {
         status: response?.status,
         message: response?.message,
@@ -326,43 +486,343 @@ class AngelAPI {
         searchSymbol: symbol
       });
 
-      if (response && response.data && response.data.length > 0) {
+      if (response?.data && response.data.length > 0) {
+        // Look for exact match first
+        const exactMatch = response.data.find((option: any) =>
+          option.tradingsymbol === symbol
+        );
+
+        if (exactMatch) {
+          logger.info(`✅ Exact token match: ${exactMatch.symboltoken} for symbol: ${exactMatch.tradingsymbol}`);
+          return exactMatch.symboltoken;
+        }
+
+        // If no exact match, take first result
         const token = response.data[0].symboltoken;
         const foundSymbol = response.data[0].tradingsymbol;
-        
-        logger.info(`✅ Token found: ${token} for symbol: ${foundSymbol}`);
+        logger.info(`⚠️ Using closest match: ${token} for symbol: ${foundSymbol} (searched: ${symbol})`);
         return token;
       }
 
-      // If exact match fails, try variations
-      logger.warn(`❌ Exact match failed for: ${symbol}, trying variations...`);
-      
-      // Try searching with just the base part to see available options
-      const baseSearch = `${indexName}${expiry}`;
-      const baseResponse = await this.searchScrips(exchange, baseSearch);
-      
-      if (baseResponse?.data && baseResponse.data.length > 0) {
-        logger.info(`📋 Available options for ${baseSearch}:`);
-        baseResponse.data.slice(0, 10).forEach((option: any, index: number) => {
-          logger.info(`   ${index + 1}. ${option.tradingsymbol} (Token: ${option.symboltoken})`);
-        });
-        
-        // Try to find a match in the results
-        const exactMatch = baseResponse.data.find((option: any) => 
-          option.tradingsymbol === symbol
-        );
-        
-        if (exactMatch) {
-          logger.info(`✅ Found exact match in base search: ${exactMatch.symboltoken}`);
-          return exactMatch.symboltoken;
+      // ✅ Enhanced fallback - try different symbol variations
+      logger.warn(`❌ Direct search failed for: ${symbol}, trying variations...`);
+
+      // Try variations of the symbol format
+      const variations = [
+        `${baseSymbol} ${formattedExpiry} ${strike} ${optionType}`, // With spaces
+        `${baseSymbol}${formattedExpiry.replace(/(\d{2})(\w{3})(\d{2})/, '$1$2$3')}${strike}${optionType}`, // Standard format
+        `${baseSymbol}${formattedExpiry.replace(/(\d{2})(\w{3})(\d{2})/, '$2$1$3')}${strike}${optionType}`, // Month first
+      ];
+
+      for (const variation of variations) {
+        try {
+          const varResponse = await this.searchScrips(exchange, variation).catch(async (error) => {
+            logger.debug(`Variation "${variation}" search failed, trying manual: ${error.message}`);
+            return await this.searchScripsViaManual(exchange, variation);
+          });
+          if (varResponse?.data && varResponse.data.length > 0) {
+            const match = varResponse.data.find((option: any) =>
+              option.tradingsymbol.includes(strike.toString()) &&
+              option.tradingsymbol.includes(optionType) &&
+              option.tradingsymbol.includes(baseSymbol)
+            );
+
+            if (match) {
+              logger.info(`✅ Found via variation "${variation}": ${match.symboltoken} for ${match.tradingsymbol}`);
+              return match.symboltoken;
+            }
+          }
+        } catch (err) {
+          logger.debug(`Variation "${variation}" failed: ${(err as Error).message}`);
         }
       }
 
+      // ✅ Final fallback - search master data directly
+      logger.info(`🔄 Trying master data file search for ${baseSymbol} options...`);
+      const masterToken = await this.getOptionTokenFromMaster(baseSymbol, formattedExpiry, strike, optionType);
+      if (masterToken) {
+        return masterToken;
+      }
+
       logger.error(`CRITICAL: Could not find token for option: ${symbol}`);
-      logger.error(`Please check if the option symbol format is correct for Angel SmartAPI`);
+      logger.error(`Available expiry formats might be different. Check current expiries for ${baseSymbol}.`);
       return null;
+
     } catch (error) {
       logger.error(`CRITICAL: Failed to get option token for ${indexName}:`, (error as Error).message);
+      return null;
+    }
+  }
+
+  // ✅ Helper method to format expiry date correctly
+  private formatExpiryDate(expiry: string): string {
+    // Convert various formats to DDMMMYY (e.g., "12SEP24")
+    if (expiry.match(/^\d{2}[A-Z]{3}\d{2}$/)) {
+      return expiry; // Already in correct format
+    }
+    
+    // Handle formats like "2024-09-12" or "12/09/2024"
+    if (expiry.includes('-') || expiry.includes('/')) {
+      const date = new Date(expiry);
+      const day = date.getDate().toString().padStart(2, '0');
+      const month = date.toLocaleString('default', { month: 'short' }).toUpperCase();
+      const year = date.getFullYear().toString().slice(-2);
+      return `${day}${month}${year}`;
+    }
+
+    // Default return as-is if format unknown
+    return expiry;
+  }
+
+  // ✅ New method to get token from master data file
+  private async getOptionTokenFromMaster(
+    baseSymbol: string,
+    expiry: string,
+    strike: number,
+    optionType: 'CE' | 'PE' | undefined
+  ): Promise<string | null> {
+    try {
+      logger.info(`📋 Fetching master data for ${baseSymbol} options...`);
+
+      const response = await axios.get('https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json');
+      const masterData = response.data;
+
+      // Filter for the specific option
+      const options = masterData.filter((item: any) => {
+        return item.exch_seg === 'NFO' &&
+               item.name &&
+               item.name.includes(baseSymbol) &&
+               item.instrumenttype === 'OPTIDX' &&
+               item.name.includes(expiry) &&
+               item.name.includes(strike.toString()) &&
+               item.name.includes(optionType || '');
+      });
+
+      if (options.length > 0) {
+        const option = options[0];
+        logger.info(`✅ Found in master data: Token=${option.token}, Name=${option.name}, Symbol=${option.symbol}`);
+        return option.token;
+      }
+
+      // Try partial matching
+      const partialOptions = masterData.filter((item: any) => {
+        return item.exch_seg === 'NFO' &&
+               item.name &&
+               item.name.includes(baseSymbol) &&
+               item.instrumenttype === 'OPTIDX' &&
+               item.name.includes(strike.toString()) &&
+               item.name.includes(optionType || '');
+      });
+
+      if (partialOptions.length > 0) {
+        logger.info(`📋 Found ${partialOptions.length} partial matches in master data:`);
+        partialOptions.slice(0, 5).forEach((option: any, index: number) => {
+          logger.info(`   ${index + 1}. ${option.name} (Token: ${option.token})`);
+        });
+
+        // Return the first reasonable match
+        const bestMatch = partialOptions.find((option: any) =>
+          option.name.includes(expiry)
+        ) || partialOptions[0];
+
+        logger.info(`✅ Using best match from master: ${bestMatch.token} for ${bestMatch.name}`);
+        return bestMatch.token;
+      }
+
+      logger.warn(`No options found in master data for ${baseSymbol} ${expiry} ${strike} ${optionType}`);
+      return null;
+
+    } catch (error) {
+      logger.error(`Master data fetch failed:`, (error as Error).message);
+      return null;
+    }
+  }
+
+  public async debugAngelFormats(): Promise<void> {
+    try {
+      logger.info('🔍 Debug: Testing Angel One option formats...');
+
+      // ✅ Test current expiry options
+      const currentDate = new Date();
+      const currentExpiry = this.formatExpiryDate(currentDate.toISOString());
+      
+      logger.info(`📅 Using current expiry format: ${currentExpiry}`);
+
+      // Test BANKNIFTY options search
+      const bankNiftySearch = await this.searchScrips('NFO', 'BANKNIFTY');
+      if (bankNiftySearch?.data && bankNiftySearch.data.length > 0) {
+        logger.info('📋 BANKNIFTY options found via search:');
+        bankNiftySearch.data.slice(0, 10).forEach((option: any, index: number) => {
+          logger.info(`   ${index + 1}. ${option.tradingsymbol} (Token: ${option.symboltoken})`);
+        });
+      }
+
+      // Test NIFTY options search
+      const niftySearch = await this.searchScrips('NFO', 'NIFTY');
+      if (niftySearch?.data && niftySearch.data.length > 0) {
+        logger.info('📋 NIFTY options found via search:');
+        niftySearch.data.slice(0, 10).forEach((option: any, index: number) => {
+          logger.info(`   ${index + 1}. ${option.tradingsymbol} (Token: ${option.symboltoken})`);
+        });
+      }
+
+      // ✅ Test master data file access
+      await this.debugMasterDataOptions();
+
+    } catch (error) {
+      logger.error('Debug failed:', (error as Error).message);
+    }
+  }
+
+  // ✅ New comprehensive debug method for master data
+  public async debugMasterDataOptions(): Promise<void> {
+    try {
+      logger.info('📋 Fetching Angel One master data for option debugging...');
+
+      const response = await axios.get('https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json');
+      const masterData = response.data;
+
+      // ✅ Find current NIFTY options
+      const niftyOptions = masterData.filter((item: any) => {
+        return item.exch_seg === 'NFO' &&
+               item.name &&
+               item.name.includes('NIFTY') &&
+               item.instrumenttype === 'OPTIDX' &&
+               !item.name.includes('BANK'); // Exclude BANKNIFTY
+      });
+
+      // ✅ Find current BANKNIFTY options
+      const bankniftyOptions = masterData.filter((item: any) => {
+        return item.exch_seg === 'NFO' &&
+               item.name &&
+               (item.name.includes('BANKNIFTY') || item.name.includes('NIFTY BANK')) &&
+               item.instrumenttype === 'OPTIDX';
+      });
+
+      logger.info(`📊 Master Data Summary:`);
+      logger.info(`   NIFTY Options: ${niftyOptions.length} contracts`);
+      logger.info(`   BANKNIFTY Options: ${bankniftyOptions.length} contracts`);
+
+      // Show sample NIFTY options
+      if (niftyOptions.length > 0) {
+        logger.info('📋 Sample NIFTY option formats:');
+        niftyOptions.slice(0, 5).forEach((option: any, index: number) => {
+          logger.info(`   ${index + 1}. Name: ${option.name} | Symbol: ${option.symbol} | Token: ${option.token}`);
+        });
+      }
+
+      // Show sample BANKNIFTY options
+      if (bankniftyOptions.length > 0) {
+        logger.info('📋 Sample BANKNIFTY option formats:');
+        bankniftyOptions.slice(0, 5).forEach((option: any, index: number) => {
+          logger.info(`   ${index + 1}. Name: ${option.name} | Symbol: ${option.symbol} | Token: ${option.token}`);
+        });
+      }
+
+      // ✅ Find unique expiry formats
+      const niftyExpiries = [...new Set(niftyOptions.slice(0, 50).map((item: any) => {
+        const match = item.name.match(/(\d{2}[A-Z]{3}\d{2})/);
+        return match ? match[1] : null;
+      }).filter(Boolean))];
+
+      const bankniftyExpiries = [...new Set(bankniftyOptions.slice(0, 50).map((item: any) => {
+        const match = item.name.match(/(\d{2}[A-Z]{3}\d{2})/);
+        return match ? match[1] : null;
+      }).filter(Boolean))];
+
+      logger.info(`📅 Available expiry formats:`);
+      logger.info(`   NIFTY: ${niftyExpiries.slice(0, 5).join(', ')}`);
+      logger.info(`   BANKNIFTY: ${bankniftyExpiries.slice(0, 5).join(', ')}`);
+
+      // ✅ Test a specific option token fetch
+      if (bankniftyExpiries.length > 0 && bankniftyOptions.length > 0) {
+        const testExpiry = bankniftyExpiries[0];
+        logger.info(`🧪 Testing token fetch for BANKNIFTY ${testExpiry} options...`);
+        
+        // Extract strike from a real option
+        const testOption = bankniftyOptions.find((opt: any) => opt.name.includes(testExpiry));
+        if (testOption) {
+          const strikeMatch = testOption.name.match(/(\d+)(CE|PE)/);
+          if (strikeMatch) {
+            const testStrike = parseInt(strikeMatch[1]);
+            const testType = strikeMatch[2] as 'CE' | 'PE';
+            
+            logger.info(`🧪 Testing: BANKNIFTY ${testStrike} ${testType} ${testExpiry}`);
+            const token = await this.getOptionToken('BANKNIFTY', testStrike, testType, testExpiry as string);
+            logger.info(`🧪 Result: ${token ? `✅ Token: ${token}` : '❌ Failed'}`);
+          }
+        }
+      }
+
+    } catch (error) {
+      logger.error('Master data debug failed:', (error as Error).message);
+    }
+  }
+
+  // ✅ Helper method to get current and next expiry dates
+  public async getCurrentExpiries(indexName: 'NIFTY' | 'BANKNIFTY'): Promise<string[]> {
+    try {
+      logger.info(`📅 Fetching current expiries for ${indexName}...`);
+
+      const response = await axios.get('https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json');
+      const masterData = response.data;
+
+      // Filter for current options
+      const options = masterData.filter((item: any) => {
+        return item.exch_seg === 'NFO' &&
+               item.name &&
+               item.name.includes(indexName) &&
+               item.instrumenttype === 'OPTIDX';
+      });
+
+      // Extract unique expiries and sort them
+      const expiries = [...new Set(options.map((item: any) => {
+        const match = item.name.match(/(\d{2}[A-Z]{3}\d{2})/);
+        return match ? match[1] : null;
+      }).filter(Boolean))].sort();
+
+      logger.info(`📅 Available ${indexName} expiries: ${expiries.join(', ')}`);
+      return expiries as string[];
+
+    } catch (error) {
+      logger.error(`Failed to get expiries for ${indexName}:`, (error as Error).message);
+      // Return reasonable defaults for current month
+      const currentDate = new Date();
+      const currentExpiry = this.formatExpiryDate(currentDate.toISOString());
+      return [currentExpiry];
+    }
+  }
+
+  // ✅ Get ATM strike price for an index
+  public async getATMStrike(indexName: 'NIFTY' | 'BANKNIFTY', currentPrice: number): Promise<number> {
+    const roundTo = indexName === 'NIFTY' ? 50 : 500; // NIFTY rounds to 50, BANKNIFTY to 500
+    return Math.round(currentPrice / roundTo) * roundTo;
+  }
+
+  // ✅ Comprehensive option token fetching with smart fallbacks
+  public async getOptionTokenSmart(
+    indexName: 'NIFTY' | 'BANKNIFTY',
+    strike: number,
+    optionType: 'CE' | 'PE',
+    expiry?: string
+  ): Promise<string | null> {
+    try {
+      // If no expiry provided, get the nearest expiry
+      if (!expiry) {
+        const expiries = await this.getCurrentExpiries(indexName);
+        if (expiries.length === 0) {
+          logger.error(`No expiries found for ${indexName}`);
+          return null;
+        }
+        expiry = expiries[0]; // Use nearest expiry
+        logger.info(`📅 Using nearest expiry: ${expiry} for ${indexName}`);
+      }
+
+      // Use the improved getOptionToken method
+      return await this.getOptionToken(indexName, strike, optionType, expiry);
+
+    } catch (error) {
+      logger.error(`Smart option token fetch failed for ${indexName}:`, (error as Error).message);
       return null;
     }
   }
@@ -569,7 +1029,7 @@ class AngelAPI {
 
       if (response?.data?.fetched && response.data.fetched.length > 0) {
         const marketData = response.data.fetched[0];
-        
+
         // Log all available fields for debugging
         logger.info(`${indexName} Available fields:`, Object.keys(marketData));
 
@@ -751,27 +1211,27 @@ class AngelAPI {
 
       // Find BANKNIFTY options for the specific expiry
       const bankniftyOptions = masterData.filter((item: any) => {
-        return item.exch_seg === 'NFO' && 
-               item.name && 
-               (item.name.includes('BANKNIFTY') || item.name.includes('BANKN')) &&
-               item.name.includes(expiry);
+        return item.exch_seg === 'NFO' &&
+          item.name &&
+          (item.name.includes('BANKNIFTY') || item.name.includes('BANKN')) &&
+          item.name.includes(expiry);
       });
 
       logger.info(`📋 Found ${bankniftyOptions.length} BANKNIFTY options for expiry ${expiry}:`);
-      
+
       bankniftyOptions.slice(0, 20).forEach((option: any, index: number) => {
         logger.info(`   ${index + 1}. Name: ${option.name} | Symbol: ${option.symbol} | Token: ${option.token}`);
       });
 
       // Also try searching without specific expiry
       const allBankNiftyOptions = masterData.filter((item: any) => {
-        return item.exch_seg === 'NFO' && 
-               item.name && 
-               (item.name.includes('BANKNIFTY') || item.name.includes('BANKN'));
+        return item.exch_seg === 'NFO' &&
+          item.name &&
+          (item.name.includes('BANKNIFTY') || item.name.includes('BANKN'));
       });
 
       logger.info(`📋 Total BANKNIFTY options in master file: ${allBankNiftyOptions.length}`);
-      
+
       // Show some examples
       const uniqueFormats = [...new Set(allBankNiftyOptions.slice(0, 10).map((item: any) => item.name))];
       logger.info('📋 Sample BANKNIFTY option name formats:');

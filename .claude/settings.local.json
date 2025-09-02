@@ -13,7 +13,10 @@
       "WebSearch",
       "Bash(taskkill:*)",
       "Bash(del fix-momentum.js)",
-      "mcp__ide__getDiagnostics"
+      "mcp__ide__getDiagnostics",
+      "WebFetch(domain:smartapi.angelone.in)",
+      "WebFetch(domain:smartapi.angelbroking.com)",
+      "Bash(del test-option-tokens.ts)"
     ],
     "deny": [],
     "ask": []
