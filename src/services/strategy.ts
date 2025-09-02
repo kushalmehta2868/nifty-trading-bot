@@ -620,37 +620,26 @@ class TradingStrategy {
     
     if (indexName === 'BANKNIFTY') {
       // BANKNIFTY: Monthly expiry only (no weekly since Nov 2024)
-      // Expiry: Last Thursday of the month
+      // Expiry: Last day of the month
       const currentMonth = today.getMonth();
       const currentYear = today.getFullYear();
       
-      // Find last Thursday of current month
-      const lastDayOfMonth = new Date(currentYear, currentMonth + 1, 0);
-      let lastThursday = new Date(lastDayOfMonth);
+      // Get last day of current month
+      let lastDayOfMonth = new Date(currentYear, currentMonth + 1, 0);
       
-      // Move backward to find last Thursday
-      while (lastThursday.getDay() !== 4) { // 4 = Thursday
-        lastThursday.setDate(lastThursday.getDate() - 1);
-      }
-      
-      // If last Thursday is today or has passed, move to next month
-      if (lastThursday <= today) {
+      // If last day of month is today or has passed, move to next month
+      if (lastDayOfMonth <= today) {
         const nextMonth = currentMonth + 1;
         const nextYear = nextMonth > 11 ? currentYear + 1 : currentYear;
         const adjustedMonth = nextMonth > 11 ? 0 : nextMonth;
         
-        const lastDayOfNextMonth = new Date(nextYear, adjustedMonth + 1, 0);
-        lastThursday = new Date(lastDayOfNextMonth);
-        
-        while (lastThursday.getDay() !== 4) {
-          lastThursday.setDate(lastThursday.getDate() - 1);
-        }
+        lastDayOfMonth = new Date(nextYear, adjustedMonth + 1, 0);
       }
       
-      const day = lastThursday.getDate().toString().padStart(2, '0');
+      const day = lastDayOfMonth.getDate().toString().padStart(2, '0');
       const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-      const month = months[lastThursday.getMonth()];
-      const year = lastThursday.getFullYear().toString().slice(-2);
+      const month = months[lastDayOfMonth.getMonth()];
+      const year = lastDayOfMonth.getFullYear().toString().slice(-2);
       
       return `${day}${month}${year}`;
     } else {

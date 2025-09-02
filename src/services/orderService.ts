@@ -164,7 +164,7 @@ class OrderService {
       logger.info(`Placing Bracket Order for ${signal.optionSymbol}`);
 
       // Get option symbol token (required for Angel API)
-      const expiry = this.generateExpiryString();
+      const expiry = this.generateExpiryString(signal.indexName);
       // Use the same optimal strike calculation as strategy for consistency
       const strike = this.calculateOptimalStrike(signal.spotPrice, signal.indexName, signal.optionType);
 
@@ -229,23 +229,47 @@ class OrderService {
     }
   }
 
-  private generateExpiryString(): string {
-    // Weekly options expire on Tuesdays
+  private generateExpiryString(indexName?: string): string {
     const today = new Date();
-    const nextTuesday = new Date(today);
+    
+    if (indexName === 'BANKNIFTY') {
+      // BANKNIFTY: Monthly expiry only (no weekly since Nov 2024)
+      // Expiry: Last day of the month
+      const currentMonth = today.getMonth();
+      const currentYear = today.getFullYear();
+      
+      // Get last day of current month
+      let lastDayOfMonth = new Date(currentYear, currentMonth + 1, 0);
+      
+      // If last day of month is today or has passed, move to next month
+      if (lastDayOfMonth <= today) {
+        const nextMonth = currentMonth + 1;
+        const nextYear = nextMonth > 11 ? currentYear + 1 : currentYear;
+        const adjustedMonth = nextMonth > 11 ? 0 : nextMonth;
+        
+        lastDayOfMonth = new Date(nextYear, adjustedMonth + 1, 0);
+      }
+      
+      const day = lastDayOfMonth.getDate().toString().padStart(2, '0');
+      const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+      const month = months[lastDayOfMonth.getMonth()];
+      const year = lastDayOfMonth.getFullYear().toString().slice(-2);
+      
+      return `${day}${month}${year}`;
+    } else {
+      // NIFTY: Weekly expiry on Tuesday (changed from Thursday since Sept 1, 2025)
+      const nextTuesday = new Date(today);
+      const daysUntilTuesday = (2 - today.getDay() + 7) % 7; // 2 = Tuesday
+      const adjustedDays = daysUntilTuesday === 0 ? 7 : daysUntilTuesday;
+      nextTuesday.setDate(today.getDate() + adjustedDays);
 
-    // Find next Tuesday (Tuesday = 2)
-    const daysUntilTuesday = (2 - today.getDay() + 7) % 7;
-    // If today is Tuesday and market is still open, use next Tuesday
-    const adjustedDays = daysUntilTuesday === 0 ? 7 : daysUntilTuesday;
-    nextTuesday.setDate(today.getDate() + adjustedDays);
+      const day = nextTuesday.getDate().toString().padStart(2, '0');
+      const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+      const month = months[nextTuesday.getMonth()];
+      const year = nextTuesday.getFullYear().toString().slice(-2);
 
-    const day = nextTuesday.getDate().toString().padStart(2, '0');
-    const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-    const month = months[nextTuesday.getMonth()];
-    const year = nextTuesday.getFullYear().toString().slice(-2);
-
-    return `${day}${month}${year}`;
+      return `${day}${month}${year}`;
+    }
   }
 
   private calculateStrike(spotPrice: number, indexName: string): number {
@@ -679,7 +703,7 @@ ${pnlColor} *P&L:* ₹${order.pnl?.toFixed(2)}
 
     try {
       // Get real-time option price from Angel One API
-      const expiry = this.generateExpiryString();
+      const expiry = this.generateExpiryString(activeOrder.signal.indexName);
       // Use optimal strike calculation for consistency with strategy
       const strike = this.calculateOptimalStrike(activeOrder.signal.spotPrice, activeOrder.signal.indexName, activeOrder.signal.optionType);
       
