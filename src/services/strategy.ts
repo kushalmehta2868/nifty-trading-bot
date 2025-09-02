@@ -210,8 +210,8 @@ class TradingStrategy {
     const mtfCEConditions = {
       majority_rsi_bullish: (+((rsi1 > 50)) + (+(rsi5 > 50)) + (+(rsi10 > 50))) >= 2, // 2 out of 3 RSI bullish
       trend_alignment: currentPrice > sma1 && sma1 >= sma5 * 0.999, // More flexible trend
-      momentum_positive: momentum1 > 0.1 || momentum5 > 0.05, // Either timeframe has momentum
-      decent_confluence: confluenceScore >= 60, // Lowered from 80% to 60%
+      momentum_positive: momentum1 > 0.01 || momentum5 > 0.01, // Very low momentum - just 0.01%
+      decent_confluence: confluenceScore >= 35, // Much lower confluence requirement
       time_filter: this.isWithinTradingHours(indexName)
     };
 
@@ -219,8 +219,8 @@ class TradingStrategy {
     const mtfPEConditions = {
       majority_rsi_bearish: (+((rsi1 < 50)) + (+(rsi5 < 50)) + (+(rsi10 < 50))) >= 2, // 2 out of 3 RSI bearish
       trend_alignment: currentPrice < sma1 && sma1 <= sma5 * 1.001, // More flexible trend
-      momentum_negative: momentum1 < -0.1 || momentum5 < -0.05, // Either timeframe has momentum
-      decent_confluence: confluenceScore >= 60, // Lowered from 80% to 60%
+      momentum_negative: momentum1 < -0.01 || momentum5 < -0.01, // Very low momentum - just -0.01%
+      decent_confluence: confluenceScore >= 35, // Much lower confluence requirement
       time_filter: this.isWithinTradingHours(indexName)
     };
 
@@ -322,7 +322,7 @@ class TradingStrategy {
       price_near_lower_or_oversold: currentPrice <= bollinger.lower * 1.01 || rsi < 35, // Near lower band OR oversold
       rsi_recovery_zone: rsi > 30 && rsi < 60, // Wider RSI range
       trend_support: currentPrice > bollinger.middle * 0.995, // Above or near middle band
-      momentum_positive: momentum > 0.05, // Lower momentum requirement
+      momentum_positive: momentum > 0.01, // Very low momentum - just 0.01%
       time_filter: this.isWithinTradingHours(indexName)
     };
 
@@ -330,7 +330,7 @@ class TradingStrategy {
       price_near_upper_or_overbought: currentPrice >= bollinger.upper * 0.99 || rsi > 65, // Near upper band OR overbought
       rsi_decline_zone: rsi < 70 && rsi > 40, // Wider RSI range
       trend_resistance: currentPrice < bollinger.middle * 1.005, // Below or near middle band
-      momentum_negative: momentum < -0.05, // Lower momentum requirement
+      momentum_negative: momentum < -0.01, // Very low momentum - just -0.01%
       time_filter: this.isWithinTradingHours(indexName)
     };
 
@@ -445,14 +445,14 @@ class TradingStrategy {
 
     // RELAXED Strategy 2: Price Action + Momentum (More practical)
     const priceActionCEConditions = {
-      price_momentum_bullish: momentum > 0.1 && rsi > 45, // Basic bullish momentum + RSI
+      price_momentum_bullish: momentum > 0.01 && rsi > 45, // Very low momentum requirement
       trend_bullish: currentPrice > sma || rsi > 55, // Either above SMA OR strong RSI
       not_overbought: rsi < 75, // Not extremely overbought
       time_filter: this.isWithinTradingHours(indexName)
     };
 
     const priceActionPEConditions = {
-      price_momentum_bearish: momentum < -0.1 && rsi < 55, // Basic bearish momentum + RSI
+      price_momentum_bearish: momentum < -0.01 && rsi < 55, // Very low momentum requirement
       trend_bearish: currentPrice < sma || rsi < 45, // Either below SMA OR weak RSI
       not_oversold: rsi > 25, // Not extremely oversold
       time_filter: this.isWithinTradingHours(indexName)

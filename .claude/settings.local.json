@@ -11,7 +11,8 @@
       "Bash(node:*)",
       "Bash(npx ts-node:*)",
       "WebSearch",
-      "Bash(taskkill:*)"
+      "Bash(taskkill:*)",
+      "Bash(del fix-momentum.js)"
     ],
     "deny": [],
     "ask": []
