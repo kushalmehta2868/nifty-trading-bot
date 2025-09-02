@@ -5,9 +5,8 @@ import { orderService } from './services/orderService';
 import { healthServer } from './services/healthServer';
 import { healthMonitor } from './services/healthMonitor';
 import { logger } from './utils/logger';
-import { config } from './config/config';
 import { isMarketOpen, getTimeUntilMarketOpen, formatTimeUntilMarketOpen, getMarketStatus } from './utils/marketHours';
-import { TradingSignal, TradingStats } from './types';
+import { TradingStats } from './types';
 
 class WebSocketTradingBot {
   private isRunning = false;

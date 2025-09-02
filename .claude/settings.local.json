@@ -12,7 +12,8 @@
       "Bash(npx ts-node:*)",
       "WebSearch",
       "Bash(taskkill:*)",
-      "Bash(del fix-momentum.js)"
+      "Bash(del fix-momentum.js)",
+      "mcp__ide__getDiagnostics"
     ],
     "deny": [],
     "ask": []

@@ -581,9 +581,10 @@ class TradingStrategy {
 
       // Generate expiry string with index-specific logic
       const expiry = this.generateExpiryString(signal.indexName);
-      const strike = this.calculateStrike(signal.spotPrice, signal.indexName);
+      const strike = this.calculateOptimalStrike(signal.spotPrice, signal.indexName, signal.optionType!);
 
       logger.info(`Using expiry: ${expiry} for ${signal.indexName} option with strike: ${strike}`);
+
 
       // Get option token first
       const tokenResponse = await angelAPI.getOptionToken(

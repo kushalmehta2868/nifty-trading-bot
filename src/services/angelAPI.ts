@@ -314,15 +314,55 @@ class AngelAPI {
       const symbol = `${indexName}${expiry}${strike}${optionType}`;
       const exchange = 'NFO';
 
+      logger.info(`🔍 Searching for option token: ${symbol} on ${exchange}`);
+      
       const response = await this.searchScrips(exchange, symbol);
+      
+      // Enhanced debug logging
+      logger.info(`📋 Angel API search response:`, {
+        status: response?.status,
+        message: response?.message,
+        dataCount: response?.data?.length || 0,
+        searchSymbol: symbol
+      });
+
       if (response && response.data && response.data.length > 0) {
-        return response.data[0].symboltoken;
+        const token = response.data[0].symboltoken;
+        const foundSymbol = response.data[0].tradingsymbol;
+        
+        logger.info(`✅ Token found: ${token} for symbol: ${foundSymbol}`);
+        return token;
       }
 
-      logger.warn(`Could not find token for option: ${symbol}`);
+      // If exact match fails, try variations
+      logger.warn(`❌ Exact match failed for: ${symbol}, trying variations...`);
+      
+      // Try searching with just the base part to see available options
+      const baseSearch = `${indexName}${expiry}`;
+      const baseResponse = await this.searchScrips(exchange, baseSearch);
+      
+      if (baseResponse?.data && baseResponse.data.length > 0) {
+        logger.info(`📋 Available options for ${baseSearch}:`);
+        baseResponse.data.slice(0, 10).forEach((option: any, index: number) => {
+          logger.info(`   ${index + 1}. ${option.tradingsymbol} (Token: ${option.symboltoken})`);
+        });
+        
+        // Try to find a match in the results
+        const exactMatch = baseResponse.data.find((option: any) => 
+          option.tradingsymbol === symbol
+        );
+        
+        if (exactMatch) {
+          logger.info(`✅ Found exact match in base search: ${exactMatch.symboltoken}`);
+          return exactMatch.symboltoken;
+        }
+      }
+
+      logger.error(`CRITICAL: Could not find token for option: ${symbol}`);
+      logger.error(`Please check if the option symbol format is correct for Angel SmartAPI`);
       return null;
     } catch (error) {
-      logger.error(`Failed to get option token:`, (error as Error).message);
+      logger.error(`CRITICAL: Failed to get option token for ${indexName}:`, (error as Error).message);
       return null;
     }
   }
@@ -698,6 +738,49 @@ class AngelAPI {
 
     } catch (error) {
       logger.error('Failed to fetch master tokens:', (error as Error).message);
+    }
+  }
+
+  // Debug method to find BANKNIFTY option symbol format
+  public async debugBankNiftyOptions(expiry: string = '30SEP25'): Promise<void> {
+    try {
+      logger.info('🔍 Debugging BANKNIFTY option symbol formats...');
+
+      const response = await axios.get('https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json');
+      const masterData = response.data;
+
+      // Find BANKNIFTY options for the specific expiry
+      const bankniftyOptions = masterData.filter((item: any) => {
+        return item.exch_seg === 'NFO' && 
+               item.name && 
+               (item.name.includes('BANKNIFTY') || item.name.includes('BANKN')) &&
+               item.name.includes(expiry);
+      });
+
+      logger.info(`📋 Found ${bankniftyOptions.length} BANKNIFTY options for expiry ${expiry}:`);
+      
+      bankniftyOptions.slice(0, 20).forEach((option: any, index: number) => {
+        logger.info(`   ${index + 1}. Name: ${option.name} | Symbol: ${option.symbol} | Token: ${option.token}`);
+      });
+
+      // Also try searching without specific expiry
+      const allBankNiftyOptions = masterData.filter((item: any) => {
+        return item.exch_seg === 'NFO' && 
+               item.name && 
+               (item.name.includes('BANKNIFTY') || item.name.includes('BANKN'));
+      });
+
+      logger.info(`📋 Total BANKNIFTY options in master file: ${allBankNiftyOptions.length}`);
+      
+      // Show some examples
+      const uniqueFormats = [...new Set(allBankNiftyOptions.slice(0, 10).map((item: any) => item.name))];
+      logger.info('📋 Sample BANKNIFTY option name formats:');
+      uniqueFormats.forEach((format, index) => {
+        logger.info(`   ${index + 1}. ${format}`);
+      });
+
+    } catch (error) {
+      logger.error('Failed to debug BANKNIFTY options:', (error as Error).message);
     }
   }
 

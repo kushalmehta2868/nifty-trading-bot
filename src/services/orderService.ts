@@ -1,7 +1,7 @@
 import { angelAPI } from './angelAPI';
 import { config } from '../config/config';
 import { logger } from '../utils/logger';
-import { TradingSignal, OrderDetails, OrderResponse } from '../types';
+import { TradingSignal, OrderDetails, OrderResponse, OptionType } from '../types';
 
 interface ActiveOrder {
   signal: TradingSignal;
@@ -166,7 +166,7 @@ class OrderService {
       // Get option symbol token (required for Angel API)
       const expiry = this.generateExpiryString(signal.indexName);
       // Use the same optimal strike calculation as strategy for consistency
-      const strike = this.calculateOptimalStrike(signal.spotPrice, signal.indexName, signal.optionType);
+      const strike = this.calculateOptimalStrike(signal.spotPrice, signal.indexName, signal.optionType!);
 
       const symbolToken = await angelAPI.getOptionToken(
         signal.indexName,
@@ -278,7 +278,7 @@ class OrderService {
   }
 
   // Optimal strike calculation matching strategy.ts for better liquidity
-  private calculateOptimalStrike(spotPrice: number, indexName: string, optionType: 'CE' | 'PE' | undefined): number {
+  private calculateOptimalStrike(spotPrice: number, indexName: string, optionType: OptionType): number {
     let baseStrike: number;
     let strikeInterval: number;
     
@@ -300,12 +300,10 @@ class OrderService {
     if (optionType === 'CE') {
       // For CE options, go 1 strike above ATM for better liquidity
       return baseStrike + strikeInterval;
-    } else if (optionType === 'PE') {
+    } else {
       // For PE options, go 1 strike below ATM for better liquidity
       return baseStrike - strikeInterval;
     }
-    
-    return baseStrike; // Fallback to ATM if optionType is undefined
   }
 
   private startOrderMonitoring(): void {
@@ -705,7 +703,7 @@ ${pnlColor} *P&L:* ₹${order.pnl?.toFixed(2)}
       // Get real-time option price from Angel One API
       const expiry = this.generateExpiryString(activeOrder.signal.indexName);
       // Use optimal strike calculation for consistency with strategy
-      const strike = this.calculateOptimalStrike(activeOrder.signal.spotPrice, activeOrder.signal.indexName, activeOrder.signal.optionType);
+      const strike = this.calculateOptimalStrike(activeOrder.signal.spotPrice, activeOrder.signal.indexName, activeOrder.signal.optionType!);
       
       const symbolToken = await angelAPI.getOptionToken(
         activeOrder.signal.indexName,
