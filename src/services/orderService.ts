@@ -500,21 +500,12 @@ class OrderService {
   }
 
   private sendEntryNotification(order: ActiveOrder): void {
-    const tradeType = order.isPaperTrade ? '📄 PAPER TRADE' : '💰 REAL TRADE';
-    const monitoringText = order.isPaperTrade ? 
-      '🎯 *Paper exits simulated automatically*' : 
-      '🤖 *Bracket exits are active - Angel One monitoring...*';
+    const tradeType = order.isPaperTrade ? '📄' : '💰';
     
     const message = `
-✅ *ENTRY EXECUTED* ${tradeType}
-📈 *${order.signal.optionSymbol}*
-
-*Entry Price:* ₹${order.entryPrice}
-*Target:* ₹${order.signal.target}
-*Stop Loss:* ₹${order.signal.stopLoss}
-*Time:* ${new Date().toLocaleTimeString()}
-
-${monitoringText}
+✅ *ENTRY* ${tradeType}
+📈 ${order.signal.optionSymbol}
+💰 Entry: ₹${order.entryPrice} | 🎯 Target: ₹${order.signal.target} | 🛑 SL: ₹${order.signal.stopLoss}
     `.trim();
 
     (process as any).emit('orderFilled', { order, message });
@@ -523,21 +514,15 @@ ${monitoringText}
   private sendExitNotification(order: ActiveOrder): void {
     const isProfit = order.exitReason === 'TARGET';
     const emoji = isProfit ? '🚀' : '🛑';
-    const resultText = isProfit ? 'PROFIT BOOKED' : 'STOP LOSS HIT';
+    const resultText = isProfit ? 'PROFIT' : 'STOPLOSS';
     const pnlColor = isProfit ? '💰' : '💸';
-    const tradeType = order.isPaperTrade ? '📄 PAPER TRADE' : '💰 REAL TRADE';
+    const tradeType = order.isPaperTrade ? '📄' : '💰';
 
     const message = `
 ${emoji} *${resultText}* ${tradeType}
-📈 *${order.signal.optionSymbol}*
-
-*Entry:* ₹${order.entryPrice}
-*Exit:* ₹${order.exitPrice}
-${pnlColor} *P&L:* ₹${order.pnl?.toFixed(2)}
-*Exit Reason:* ${order.exitReason}
-*Time:* ${new Date().toLocaleTimeString()}
-
-📊 *Daily P&L:* ₹${this.dailyPnL.toFixed(2)}
+📈 ${order.signal.optionSymbol}
+💰 Entry: ₹${order.entryPrice} | Exit: ₹${order.exitPrice}
+${pnlColor} P&L: ₹${order.pnl?.toFixed(2)} | Daily: ₹${this.dailyPnL.toFixed(2)}
     `.trim();
 
     logger.info(`📱 Sending exit notification to Telegram`);

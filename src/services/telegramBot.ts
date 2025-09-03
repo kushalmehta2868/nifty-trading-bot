@@ -35,8 +35,8 @@ class TelegramBotService {
 
     // Listen for order placement confirmations
     const orderPlacedHandler = async (data: { signal: any, orderId: string, isPaperTrade?: boolean }) => {
-      const tradeType = data.isPaperTrade ? '📄 Paper' : '💰 Real';
-      const message = `✅ *ORDER PLACED* ${tradeType}\n📋 *Order ID:* ${data.orderId}\n📈 *Symbol:* ${data.signal.optionSymbol}\n⏰ *Time:* ${new Date().toLocaleTimeString()}`;
+      const tradeType = data.isPaperTrade ? '📄' : '💰';
+      const message = `✅ *ORDER PLACED* ${tradeType}\n📈 ${data.signal.optionSymbol}\n📋 ${data.orderId}`;
       await this.sendMessage(message);
     };
     (process as any).on('orderPlaced', orderPlacedHandler);
@@ -127,67 +127,27 @@ class TelegramBotService {
   private formatTradingSignal(signal: TradingSignal): string {
     const directionEmoji = signal.direction === 'UP' ? '🚀' : '🔻';
     const typeEmoji = signal.optionType === 'CE' ? '📈' : '📉';
-    const tradingMode = config.trading.paperTrading ? '📄 PAPER' : '💰 REAL';
+    const tradingMode = config.trading.paperTrading ? '📄' : '💰';
     
-    // Determine which strategy generated this signal based on confidence ranges
-    let strategyName = '🎯 Bollinger+RSI';
-    let strategyIcon = '🎯';
-    if (signal.confidence >= 90) {
-      strategyName = '🏆 Multi-Timeframe Confluence';
-      strategyIcon = '🏆';
-    } else if (signal.confidence >= 80) {
-      strategyName = '🎯 Bollinger+RSI';
-      strategyIcon = '🎯';
-    } else {
-      strategyName = '🚀 Price Action+Momentum';
-      strategyIcon = '🚀';
-    }
+    // Determine strategy icon based on confidence
+    const strategyIcon = signal.confidence >= 90 ? '🏆' : signal.confidence >= 80 ? '🎯' : '🚀';
 
     // Calculate profit/loss potential
     const profitPotential = ((signal.target - signal.entryPrice) / signal.entryPrice) * 100;
     const riskAmount = ((signal.entryPrice - signal.stopLoss) / signal.entryPrice) * 100;
     const riskReward = profitPotential / riskAmount;
 
-    // Determine exit management text
-    const exitText = config.trading.paperTrading ?
-      '📄 *Paper Exit:* Real-time price monitoring with same logic as live trading' :
-      '🤖 *Auto Exit:* Bracket Order - Angel One handles target/SL automatically';
-
-    // Calculate lot value and position size
-    const lotSize = config.indices[signal.indexName].lotSize;
-    const positionValue = signal.entryPrice * lotSize;
-
     return `
-${strategyIcon} *TRADING SIGNAL* ${tradingMode}
-${directionEmoji} *${signal.indexName} ${signal.optionType}* ${typeEmoji}
+${strategyIcon} *${signal.indexName} ${signal.optionType}* ${tradingMode} ${typeEmoji}
+📈 ${signal.optionSymbol}
+🎯 Conf: ${signal.confidence.toFixed(0)}% | RR: 1:${riskReward.toFixed(2)}
 
-🎯 *STRATEGY:* ${strategyName}
-📈 *Symbol:* ${signal.optionSymbol}
-🎪 *Confidence:* ${signal.confidence.toFixed(0)}%
+💰 Entry: ₹${signal.entryPrice.toFixed(2)}
+🎯 Target: ₹${signal.target.toFixed(2)} (+${profitPotential.toFixed(1)}%)
+🛑 SL: ₹${signal.stopLoss.toFixed(2)} (-${riskAmount.toFixed(1)}%)
 
-💰 *POSITION DETAILS:*
-*Entry Price:* ₹${signal.entryPrice.toFixed(2)}
-*Target:* ₹${signal.target.toFixed(2)} (+${profitPotential.toFixed(1)}%)
-*Stop Loss:* ₹${signal.stopLoss.toFixed(2)} (-${riskAmount.toFixed(1)}%)
-*Risk:Reward:* 1:${riskReward.toFixed(2)}
-
-📊 *ORDER INFO:*
-*Lot Size:* ${lotSize} units
-*Position Value:* ₹${positionValue.toFixed(0)}
-*Spot Price:* ₹${signal.spotPrice.toFixed(2)}
-
-📈 *TECHNICAL DATA:*
-*RSI:* ${signal.technicals.rsi.toFixed(1)}
-*Trend (SMA):* ₹${(signal.technicals.vwap || 0).toFixed(2)}
-*Momentum:* ${(signal.technicals.priceChange || 0).toFixed(2)}%
-*Price vs Trend:* ${signal.spotPrice > (signal.technicals.vwap || 0) ? '📈 Above' : '📉 Below'}
-
-⚡ *EXECUTION:*
-${exitText}
-⏰ *Signal Time:* ${signal.timestamp.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })}
-🔗 *Data Source:* Angel One Live WebSocket
-
-${config.trading.autoTrade ? '✅ *Auto-trading ENABLED* - Order will be placed automatically' : '⚠️ *Auto-trading DISABLED* - Manual execution required'}
+📊 Spot: ₹${signal.spotPrice.toFixed(2)} | RSI: ${signal.technicals.rsi.toFixed(1)}
+⏰ ${signal.timestamp.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false })}
         `.trim();
   }
 
