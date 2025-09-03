@@ -221,8 +221,6 @@ class AngelAPI {
     };
 
     try {
-      console.log(`🔄 Making ${method} request to: ${this.baseURL}${endpoint}`);
-      console.log('📤 Request data:', data);
 
       const response = await axios({
         method,
