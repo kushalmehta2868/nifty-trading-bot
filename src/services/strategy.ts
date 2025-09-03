@@ -251,7 +251,9 @@ class TradingStrategy {
     let signal: TradingSignal | null = null;
 
     if (mtfCEMet) {
-      const strike = this.calculateOptimalStrike(currentPrice, indexName, 'CE');
+      // ✅ Use new premium-based strike selection
+      const expiry = this.generateExpiryString(indexName);
+      const { strike, estimatedPremium } = await this.calculateOptimalStrike(currentPrice, indexName, 'CE', expiry);
       const baseConfidence = 80; // Base for relaxed multi-timeframe
       const confluenceBonus = Math.min(15, (confluenceScore - 60) / 2);
       const trendBonus = mtfCEConditions.trend_alignment ? 5 : 0;
@@ -262,7 +264,7 @@ class TradingStrategy {
         spotPrice: currentPrice,
         optionType: 'CE',
         optionSymbol: this.generateOptionSymbol(indexName, strike, 'CE'),
-        entryPrice: 0,
+        entryPrice: 0, // Will be set by real API call
         target: 0,
         stopLoss: 0,
         confidence: Math.min(98, baseConfidence + confluenceBonus + trendBonus),
@@ -275,9 +277,11 @@ class TradingStrategy {
         }
       };
 
-      logger.info(`🏆 Multi-Timeframe CE Signal: Confluence=${confluenceScore.toFixed(0)}%, All TF aligned, Vol=${volatility.isExpanding}`);
+      logger.info(`🏆 Multi-Timeframe CE Signal: Strike=${strike}, Est Premium=₹${estimatedPremium.toFixed(2)}, Confluence=${confluenceScore.toFixed(0)}%`);
     } else if (mtfPEMet) {
-      const strike = this.calculateOptimalStrike(currentPrice, indexName, 'PE');
+      // ✅ Use new premium-based strike selection
+      const expiry = this.generateExpiryString(indexName);
+      const { strike, estimatedPremium } = await this.calculateOptimalStrike(currentPrice, indexName, 'PE', expiry);
       const baseConfidence = 80;
       const confluenceBonus = Math.min(15, (confluenceScore - 60) / 2);
       const trendBonus = mtfPEConditions.trend_alignment ? 5 : 0;
@@ -288,7 +292,7 @@ class TradingStrategy {
         spotPrice: currentPrice,
         optionType: 'PE',
         optionSymbol: this.generateOptionSymbol(indexName, strike, 'PE'),
-        entryPrice: 0,
+        entryPrice: 0, // Will be set by real API call
         target: 0,
         stopLoss: 0,
         confidence: Math.min(98, baseConfidence + confluenceBonus + trendBonus),
@@ -301,7 +305,7 @@ class TradingStrategy {
         }
       };
 
-      logger.info(`🏆 Multi-Timeframe PE Signal: Confluence=${confluenceScore.toFixed(0)}%, All TF aligned, Vol=${volatility.isExpanding}`);
+      logger.info(`🏆 Multi-Timeframe PE Signal: Strike=${strike}, Est Premium=₹${estimatedPremium.toFixed(2)}, Confluence=${confluenceScore.toFixed(0)}%`);
     }
 
     return signal;
@@ -384,7 +388,9 @@ class TradingStrategy {
     let signal: TradingSignal | null = null;
 
     if (bollingerCEMet) {
-      const strike = this.calculateOptimalStrike(currentPrice, indexName, 'CE');
+      // ✅ Use new premium-based strike selection
+      const expiry = this.generateExpiryString(indexName);
+      const { strike, estimatedPremium } = await this.calculateOptimalStrike(currentPrice, indexName, 'CE', expiry);
       const confidence = 80 + Math.min(15, Math.abs(momentum) * 5) + (bollinger.squeeze ? 5 : 0);
 
       signal = {
@@ -406,9 +412,11 @@ class TradingStrategy {
         }
       };
 
-      logger.info(`🎯 Bollinger+RSI CE Signal: Squeeze=${bollinger.squeeze}, RSI=${rsi.toFixed(2)}, Momentum=${momentum.toFixed(2)}%`);
+      logger.info(`🎯 Bollinger+RSI CE Signal: Strike=${strike}, Est Premium=₹${estimatedPremium.toFixed(2)}, Squeeze=${bollinger.squeeze}`);
     } else if (bollingerPEMet) {
-      const strike = this.calculateOptimalStrike(currentPrice, indexName, 'PE');
+      // ✅ Use new premium-based strike selection
+      const expiry = this.generateExpiryString(indexName);
+      const { strike, estimatedPremium } = await this.calculateOptimalStrike(currentPrice, indexName, 'PE', expiry);
       const confidence = 80 + Math.min(15, Math.abs(momentum) * 5) + (bollinger.squeeze ? 5 : 0);
 
       signal = {
@@ -430,7 +438,7 @@ class TradingStrategy {
         }
       };
 
-      logger.info(`🎯 Bollinger+RSI PE Signal: Squeeze=${bollinger.squeeze}, RSI=${rsi.toFixed(2)}, Momentum=${momentum.toFixed(2)}%`);
+      logger.info(`🎯 Bollinger+RSI PE Signal: Strike=${strike}, Est Premium=₹${estimatedPremium.toFixed(2)}, Squeeze=${bollinger.squeeze}`);
     }
 
     return signal;
@@ -489,7 +497,9 @@ class TradingStrategy {
     let signal: TradingSignal | null = null;
 
     if (actionCEMet) {
-      const strike = this.calculateOptimalStrike(currentPrice, indexName, 'CE');
+      // ✅ Use new premium-based strike selection
+      const expiry = this.generateExpiryString(indexName);
+      const { strike, estimatedPremium } = await this.calculateOptimalStrike(currentPrice, indexName, 'CE', expiry);
       const confidence = 78 + Math.min(15, Math.abs(momentum) * 3) + (supportResistance.nearSupport ? 7 : 0);
 
       signal = {
@@ -511,9 +521,11 @@ class TradingStrategy {
         }
       };
 
-      logger.info(`🚀 Price Action CE Signal: Support bounce with ${momentum.toFixed(2)}% momentum`);
+      logger.info(`🚀 Price Action CE Signal: Strike=${strike}, Est Premium=₹${estimatedPremium.toFixed(2)}, Support bounce`);
     } else if (actionPEMet) {
-      const strike = this.calculateOptimalStrike(currentPrice, indexName, 'PE');
+      // ✅ Use new premium-based strike selection
+      const expiry = this.generateExpiryString(indexName);
+      const { strike, estimatedPremium } = await this.calculateOptimalStrike(currentPrice, indexName, 'PE', expiry);
       const confidence = 78 + Math.min(15, Math.abs(momentum) * 3) + (supportResistance.nearResistance ? 7 : 0);
 
       signal = {
@@ -535,7 +547,7 @@ class TradingStrategy {
         }
       };
 
-      logger.info(`🚀 Price Action PE Signal: Resistance rejection with ${momentum.toFixed(2)}% momentum`);
+      logger.info(`🚀 Price Action PE Signal: Strike=${strike}, Est Premium=₹${estimatedPremium.toFixed(2)}, Resistance rejection`);
     }
 
     return signal;
@@ -547,6 +559,20 @@ class TradingStrategy {
       const realPrice = await this.getRealOptionPrice(signal);
 
       if (realPrice) {
+        // ✅ FINAL VALIDATION: Check if actual premium exceeds ₹15,000 limit
+        const lotSize = config.indices[signal.indexName].lotSize;
+        const actualPositionValue = realPrice * lotSize;
+        const maxPositionValue = 15000;
+
+        if (actualPositionValue > maxPositionValue) {
+          logger.error(`❌ POSITION SIZE LIMIT EXCEEDED:`);
+          logger.error(`   Option: ${signal.optionSymbol}`);
+          logger.error(`   Real Premium: ₹${realPrice.toFixed(2)}`);
+          logger.error(`   Position Value: ₹${actualPositionValue.toFixed(0)} (Limit: ₹${maxPositionValue})`);
+          logger.error(`   📋 Signal REJECTED due to premium being too expensive`);
+          throw new Error(`Position value ₹${actualPositionValue.toFixed(0)} exceeds ₹15,000 limit`);
+        }
+
         signal.entryPrice = realPrice;
 
         // 🚀 ADAPTIVE VOLATILITY-BASED TARGETS 
@@ -563,6 +589,7 @@ class TradingStrategy {
         const riskReward = profitPotential / riskAmount;
 
         logger.info(`✅ Real Option Price: ${signal.optionSymbol} = ₹${signal.entryPrice}`);
+        logger.info(`💰 Position Value: ₹${actualPositionValue.toFixed(0)} (within ₹${maxPositionValue} limit)`);
         logger.info(`🎯 Adaptive Targets: Target=₹${signal.target} (+${profitPotential.toFixed(1)}%) | SL=₹${signal.stopLoss} (-${riskAmount.toFixed(1)}%)`);
         logger.info(`📊 Risk:Reward = 1:${riskReward.toFixed(2)} | Volatility Expanding: ${volatility.isExpanding}`);
       } else {
@@ -587,7 +614,9 @@ class TradingStrategy {
 
       // Generate expiry string with index-specific logic
       const expiry = this.generateExpiryString(signal.indexName);
-      const strike = this.calculateOptimalStrike(signal.spotPrice, signal.indexName, signal.optionType!);
+      
+      // ✅ Extract strike from the already generated option symbol instead of recalculating
+      const strike = this.extractStrikeFromSymbol(signal.optionSymbol, signal.indexName);
 
       logger.info(`Using expiry: ${expiry} for ${signal.indexName} option with strike: ${strike}`);
 
@@ -711,8 +740,17 @@ class TradingStrategy {
     }
   }
 
-  // New optimized strike calculation for better liquidity
-  private calculateOptimalStrike(spotPrice: number, indexName: IndexName, optionType: OptionType): number {
+  // ✅ NEW: Premium-based strike selection with 15k position limit
+  private async calculateOptimalStrike(
+    spotPrice: number, 
+    indexName: IndexName, 
+    optionType: OptionType,
+    expiry: string
+  ): Promise<{ strike: number; estimatedPremium: number }> {
+    const maxPositionValue = 15000; // ₹15,000 maximum position value
+    const lotSize = config.indices[indexName].lotSize;
+    const maxPremiumPerUnit = maxPositionValue / lotSize; // Max premium per option unit
+
     let baseStrike: number;
     let strikeInterval: number;
 
@@ -730,15 +768,129 @@ class TradingStrategy {
         strikeInterval = 50;
     }
 
-    // For better liquidity, choose strikes that are slightly out-of-the-money (OTM)
-    // This typically has higher volume and better bid-ask spreads
+    // Calculate days to expiry for premium estimation
+    const daysToExpiry = this.calculateDaysToExpiry(expiry);
+    
+    // Start with 1 strike OTM and move further if premium is too high
+    let strike: number;
+    let strikesAway = 1;
+    let estimatedPremium = 0;
+    const maxStrikesToTry = 8; // Don't go too far OTM
 
-    if (optionType === 'CE') {
-      // For CE options, go 1-2 strikes above ATM for better liquidity
-      return baseStrike + strikeInterval;
-    } else {
-      // For PE options, go 1-2 strikes below ATM for better liquidity
-      return baseStrike - strikeInterval;
+    do {
+      if (optionType === 'CE') {
+        strike = baseStrike + (strikeInterval * strikesAway);
+      } else {
+        strike = baseStrike - (strikeInterval * strikesAway);
+      }
+
+      // Estimate premium based on distance from spot and time value
+      estimatedPremium = this.estimateOptionPremium(
+        spotPrice, 
+        strike, 
+        optionType, 
+        daysToExpiry, 
+        indexName
+      );
+
+      const positionValue = estimatedPremium * lotSize;
+      
+      logger.info(`${indexName} ${optionType} Strike ${strike}: Est Premium ₹${estimatedPremium.toFixed(2)}, Position Value ₹${positionValue.toFixed(0)} (${strikesAway} strikes OTM)`);
+
+      if (positionValue <= maxPositionValue) {
+        logger.info(`✅ Selected strike ${strike} with estimated position value ₹${positionValue.toFixed(0)} (within ₹15,000 limit)`);
+        return { strike, estimatedPremium };
+      }
+
+      strikesAway++;
+    } while (strikesAway <= maxStrikesToTry);
+
+    // If all strikes are too expensive, return the farthest one with warning
+    logger.warn(`⚠️ All strikes expensive for ${indexName} ${optionType}! Using ${strike} (₹${(estimatedPremium * lotSize).toFixed(0)} position)`);
+    return { strike, estimatedPremium };
+  }
+
+  // Helper method to calculate days to expiry
+  private calculateDaysToExpiry(expiry: string): number {
+    try {
+      // Parse expiry format like "30SEP25"
+      const day = parseInt(expiry.substring(0, 2));
+      const monthStr = expiry.substring(2, 5);
+      const year = 2000 + parseInt(expiry.substring(5, 7));
+
+      const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+      const month = months.indexOf(monthStr);
+
+      const expiryDate = new Date(year, month, day);
+      const today = new Date();
+      
+      const diffTime = expiryDate.getTime() - today.getTime();
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      
+      return Math.max(0, diffDays);
+    } catch (error) {
+      logger.warn(`Could not parse expiry ${expiry}, assuming 7 days`);
+      return 7; // Default assumption
+    }
+  }
+
+  // Rough option premium estimation based on intrinsic + time value
+  private estimateOptionPremium(
+    spotPrice: number,
+    strike: number,
+    optionType: OptionType,
+    daysToExpiry: number,
+    indexName: IndexName
+  ): number {
+    // Intrinsic value
+    let intrinsicValue = 0;
+    if (optionType === 'CE' && spotPrice > strike) {
+      intrinsicValue = spotPrice - strike;
+    } else if (optionType === 'PE' && spotPrice < strike) {
+      intrinsicValue = strike - spotPrice;
+    }
+
+    // Time value estimation (rough approximation)
+    // Higher volatility for BANKNIFTY, more time value for longer expiry
+    const volatilityFactor = indexName === 'BANKNIFTY' ? 0.25 : 0.20; // 25% vs 20% annualized
+    const timeValueBase = Math.sqrt(daysToExpiry / 365) * volatilityFactor * spotPrice * 0.1; // Rough approximation
+    
+    // Distance penalty - options further away have less time value per rupee
+    const distanceFromSpot = Math.abs(spotPrice - strike) / spotPrice;
+    const distancePenalty = Math.exp(-distanceFromSpot * 3); // Exponential decay
+    
+    const timeValue = timeValueBase * distancePenalty;
+    
+    // Total premium (never less than intrinsic value)
+    const totalPremium = Math.max(intrinsicValue + timeValue, intrinsicValue);
+    
+    // Minimum premium for very OTM options (market makers need some profit)
+    const minimumPremium = indexName === 'BANKNIFTY' ? 20 : 10; // Minimum ₹20 for BankNifty, ₹10 for Nifty
+    
+    return Math.max(totalPremium, minimumPremium);
+  }
+
+  // Helper method to extract strike price from option symbol
+  private extractStrikeFromSymbol(optionSymbol: string, indexName: IndexName): number {
+    try {
+      // Format: NIFTY03SEP25024700CE or BANKNIFTY26SEP2552500PE
+      // Remove index name and expiry to get strike+type
+      const indexNameLength = indexName.length;
+      const expiryLength = 7; // Format: 03SEP25
+      const typeLength = 2; // CE or PE
+      
+      const symbolWithoutIndex = optionSymbol.substring(indexNameLength);
+      const symbolWithoutExpiry = symbolWithoutIndex.substring(expiryLength);
+      const strikeWithType = symbolWithoutExpiry.substring(0, symbolWithoutExpiry.length - typeLength);
+      
+      return parseInt(strikeWithType);
+    } catch (error) {
+      logger.error(`Failed to extract strike from ${optionSymbol}, using fallback calculation`);
+      // Fallback to ATM calculation
+      const baseStrike = indexName === 'BANKNIFTY' ? 
+        Math.round(25000 / 100) * 100 : 
+        Math.round(25000 / 50) * 50;
+      return baseStrike;
     }
   }
 

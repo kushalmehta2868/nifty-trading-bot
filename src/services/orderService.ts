@@ -178,8 +178,8 @@ class OrderService {
 
       // Get option symbol token (required for Angel API)
       const expiry = this.generateExpiryString(signal.indexName);
-      // Use the same optimal strike calculation as strategy for consistency
-      const strike = this.calculateOptimalStrike(signal.spotPrice, signal.indexName, signal.optionType!);
+      // ✅ CRITICAL FIX: Extract strike from signal's option symbol (already calculated with premium control)
+      const strike = this.extractStrikeFromSymbol(signal.optionSymbol, signal.indexName);
 
       const symbolToken = await angelAPI.getOptionToken(
         signal.indexName,
@@ -290,34 +290,8 @@ class OrderService {
     return Math.round(spotPrice / roundTo) * roundTo;
   }
 
-  // Optimal strike calculation matching strategy.ts for better liquidity
-  private calculateOptimalStrike(spotPrice: number, indexName: string, optionType: OptionType): number {
-    let baseStrike: number;
-    let strikeInterval: number;
-    
-    switch (indexName) {
-      case 'BANKNIFTY':
-        baseStrike = Math.round(spotPrice / 100) * 100;
-        strikeInterval = 100;
-        break;
-      case 'NIFTY':
-        baseStrike = Math.round(spotPrice / 50) * 50;
-        strikeInterval = 50;
-        break;
-      default:
-        baseStrike = Math.round(spotPrice / 50) * 50;
-        strikeInterval = 50;
-    }
-
-    // For better liquidity, choose strikes that are slightly out-of-the-money (OTM)
-    if (optionType === 'CE') {
-      // For CE options, go 1 strike above ATM for better liquidity
-      return baseStrike + strikeInterval;
-    } else {
-      // For PE options, go 1 strike below ATM for better liquidity
-      return baseStrike - strikeInterval;
-    }
-  }
+  // ✅ REMOVED: Old calculateOptimalStrike method - now using extractStrikeFromSymbol
+  // Strike is calculated in strategy.ts with premium control and passed via signal.optionSymbol
 
   private startOrderMonitoring(): void {
     // Check order status every 3 seconds for optimal balance of speed and safety
@@ -550,6 +524,32 @@ ${pnlColor} P&L: ₹${order.pnl?.toFixed(2)} | Daily: ₹${this.dailyPnL.toFixed
     };
   }
 
+  // ✅ Helper method to extract strike price from option symbol (same as strategy)
+  private extractStrikeFromSymbol(optionSymbol: string, indexName: string): number {
+    try {
+      // Format: NIFTY03SEP25024700CE or BANKNIFTY26SEP2552500PE
+      // Remove index name and expiry to get strike+type
+      const indexNameLength = indexName.length;
+      const expiryLength = 7; // Format: 03SEP25
+      const typeLength = 2; // CE or PE
+      
+      const symbolWithoutIndex = optionSymbol.substring(indexNameLength);
+      const symbolWithoutExpiry = symbolWithoutIndex.substring(expiryLength);
+      const strikeWithType = symbolWithoutExpiry.substring(0, symbolWithoutExpiry.length - typeLength);
+      
+      const extractedStrike = parseInt(strikeWithType);
+      logger.info(`📋 Extracted strike ${extractedStrike} from ${optionSymbol}`);
+      return extractedStrike;
+    } catch (error) {
+      logger.error(`Failed to extract strike from ${optionSymbol}, using fallback calculation`);
+      // Fallback to ATM calculation
+      const baseStrike = indexName === 'BANKNIFTY' ? 
+        Math.round(25000 / 100) * 100 : 
+        Math.round(25000 / 50) * 50;
+      return baseStrike;
+    }
+  }
+
   public async getDailyBalanceSummary(): Promise<string> {
     try {
       let summary = `💰 *Daily Balance Summary*\n\n`;
@@ -700,8 +700,8 @@ ${pnlColor} P&L: ₹${order.pnl?.toFixed(2)} | Daily: ₹${this.dailyPnL.toFixed
     try {
       // Get real-time option price from Angel One API
       const expiry = this.generateExpiryString(activeOrder.signal.indexName);
-      // Use optimal strike calculation for consistency with strategy
-      const strike = this.calculateOptimalStrike(activeOrder.signal.spotPrice, activeOrder.signal.indexName, activeOrder.signal.optionType!);
+      // ✅ CRITICAL FIX: Extract strike from signal's option symbol (already calculated with premium control)
+      const strike = this.extractStrikeFromSymbol(activeOrder.signal.optionSymbol, activeOrder.signal.indexName);
       
       const symbolToken = await angelAPI.getOptionToken(
         activeOrder.signal.indexName,
