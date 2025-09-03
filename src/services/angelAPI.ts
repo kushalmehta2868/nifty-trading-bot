@@ -435,10 +435,10 @@ class AngelAPI {
     symbolToken: string
   ): Promise<number | null> {
     try {
-      const response = await this.getLTP('NFO', tradingSymbol, symbolToken);
-
-      if (response && response.data && response.data.ltp) {
-        return parseFloat(response.data.ltp);
+      const response = await this.getQuote('NFO', tradingSymbol, symbolToken);
+      console.log("response ==> ", response);
+      if (response && response.ltp) {
+        return parseFloat(response.ltp);
       }
 
       logger.warn(`Could not fetch option price for ${tradingSymbol}`);
@@ -980,24 +980,46 @@ class AngelAPI {
   public async getQuote(
     exchange: string,
     tradingSymbol: string,
-    symbolToken: string
+    symbolToken: string,
+    mode: 'LTP' | 'OHLC' | 'FULL' = 'LTP'
   ): Promise<any> {
     try {
       const response = await this.makeRequest(
-        '/rest/secure/angelbroking/order/v1/getQuote',
+        '/rest/secure/angelbroking/market/v1/quote/',
         'POST',
         {
-          exchange,
-          tradingsymbol: tradingSymbol,
-          symboltoken: symbolToken
+          mode: mode,
+          exchangeTokens: {
+            [exchange]: [symbolToken]
+          }
         }
       );
+
+      // Log the response for debugging
+      logger.info(`Quote API response for ${tradingSymbol}:`, response);
+
+      // Check if data was successfully fetched
+      if (response?.status === true && response?.data?.fetched?.length > 0) {
+        const marketData = response.data.fetched[0];
+        logger.info(`✅ Quote data received for ${tradingSymbol}:`, {
+          ltp: marketData.ltp,
+          token: symbolToken
+        });
+        return marketData;
+      }
+
+      // Check for unfetched tokens with errors
+      if (response?.data?.unfetched?.length > 0) {
+        logger.warn(`❌ Quote not fetched for ${tradingSymbol}:`, response.data.unfetched);
+      }
+
       return response;
     } catch (error) {
       logger.error(`Failed to get quote for ${tradingSymbol}:`, (error as Error).message);
       return null;
     }
   }
+
 
   // Get volume data for NSE indices only (NIFTY and BANKNIFTY)
   public async getVolumeData(
