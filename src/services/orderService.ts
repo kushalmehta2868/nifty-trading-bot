@@ -61,6 +61,19 @@ class OrderService {
         return;
       }
 
+      // ✅ CHECK FOR EXISTING ACTIVE POSITIONS IN SAME INDEX
+      const existingPosition = this.activeOrders.find(order => 
+        order.signal.indexName === signal.indexName && 
+        (order.status === 'PLACED' || order.status === 'FILLED')
+      );
+
+      if (existingPosition) {
+        logger.warn(`❌ POSITION CONFLICT: ${signal.indexName} ${signal.optionType} signal blocked`);
+        logger.warn(`   Existing: ${existingPosition.signal.optionType} (${existingPosition.status}) - Order ID: ${existingPosition.orderId}`);
+        logger.warn(`   📋 Rule: Only one position per index allowed at a time`);
+        return;
+      }
+
       logger.info(`🔄 Processing ${config.trading.paperTrading ? 'PAPER' : 'REAL'} order for ${signal.optionSymbol}`);
       logger.info(`💰 Order Details: Entry=₹${signal.entryPrice} | Target=₹${signal.target} | SL=₹${signal.stopLoss}`);
 

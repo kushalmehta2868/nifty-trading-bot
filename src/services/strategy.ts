@@ -119,12 +119,13 @@ class TradingStrategy {
     const signal = await this.analyzeSignal(indexName, priceUpdate.price, buffer);
 
     if (signal && signal.confidence >= config.strategy.confidenceThreshold) {
-      const signalKey = `${indexName}_${signal.optionType}`;
+      // ✅ CHANGE: Use index name for cooldown (not signal type) to prevent multiple positions
+      const signalKey = indexName; // Simplified: per index, not per option type
 
-      // Check cooldown for this specific signal type
+      // Check cooldown for this index (both CE and PE blocked during cooldown)
       if (this.isSignalInCooldown(signalKey)) {
         const cooldownRemaining = Math.ceil((config.trading.signalCooldown - (Date.now() - (this.lastSignalTime[signalKey] || 0))) / 1000);
-        logger.info(`⏳ ${indexName} ${signal.optionType} - Signal cooldown active, ${cooldownRemaining}s remaining`);
+        logger.info(`⏳ ${indexName} - Index cooldown active, ${cooldownRemaining}s remaining (blocks both CE/PE)`);
         return;
       }
 
@@ -206,21 +207,21 @@ class TradingStrategy {
     // Advanced volatility calculation for adaptive targets
     const volatility = this.calculateAdaptiveVolatility(tf1);
 
-    // RELAXED Multi-timeframe CE conditions (more practical)
+    // ✅ TIGHTENED Multi-timeframe CE conditions (higher quality signals)
     const mtfCEConditions = {
-      majority_rsi_bullish: (+((rsi1 > 50)) + (+(rsi5 > 50)) + (+(rsi10 > 50))) >= 2, // 2 out of 3 RSI bullish
-      trend_alignment: currentPrice > sma1 && sma1 >= sma5 * 0.999, // More flexible trend
-      momentum_positive: momentum1 > 0.01 || momentum5 > 0.01, // Very low momentum - just 0.01%
-      decent_confluence: confluenceScore >= 35, // Much lower confluence requirement
+      majority_rsi_bullish: (+((rsi1 > 55)) + (+(rsi5 > 55)) + (+(rsi10 > 55))) >= 2, // Stronger RSI requirement
+      trend_alignment: currentPrice > sma1 && sma1 >= sma5 && sma5 >= sma10, // Strict trend alignment
+      momentum_strong: momentum1 > 0.05 && momentum5 > 0.05, // 0.05% momentum requirement
+      strong_confluence: confluenceScore >= 70, // Higher confluence requirement
       time_filter: this.isWithinTradingHours(indexName)
     };
 
-    // RELAXED Multi-timeframe PE conditions
+    // ✅ TIGHTENED Multi-timeframe PE conditions (higher quality signals)
     const mtfPEConditions = {
-      majority_rsi_bearish: (+((rsi1 < 50)) + (+(rsi5 < 50)) + (+(rsi10 < 50))) >= 2, // 2 out of 3 RSI bearish
-      trend_alignment: currentPrice < sma1 && sma1 <= sma5 * 1.001, // More flexible trend
-      momentum_negative: momentum1 < -0.01 || momentum5 < -0.01, // Very low momentum - just -0.01%
-      decent_confluence: confluenceScore >= 35, // Much lower confluence requirement
+      majority_rsi_bearish: (+((rsi1 < 45)) + (+(rsi5 < 45)) + (+(rsi10 < 45))) >= 2, // Stronger RSI requirement
+      trend_alignment: currentPrice < sma1 && sma1 <= sma5 && sma5 <= sma10, // Strict trend alignment
+      momentum_strong: momentum1 < -0.05 && momentum5 < -0.05, // -0.05% momentum requirement
+      strong_confluence: confluenceScore >= 70, // Higher confluence requirement
       time_filter: this.isWithinTradingHours(indexName)
     };
 
@@ -230,7 +231,7 @@ class TradingStrategy {
     // Log multi-timeframe analysis every 20 seconds (less frequent due to complexity)
     const shouldLogMTF = Date.now() % 20000 < 1000;
     if (shouldLogMTF || mtfCEMet || mtfPEMet) {
-      logger.info(`🏆 ${indexName} Multi-Timeframe Confluence (RELAXED):`);
+      logger.info(`🏆 ${indexName} Multi-Timeframe Confluence (TIGHTENED):`);
       logger.info(`   💰 Price: ${currentPrice} | Confluence: ${confluenceScore.toFixed(0)}%`);
       logger.info(`   📊 RSI: 1t=${rsi1.toFixed(1)} | 5t=${rsi5.toFixed(1)} | 10t=${rsi10.toFixed(1)}`);
       logger.info(`   📈 Momentum: 1t=${momentum1.toFixed(2)}% | 5t=${momentum5.toFixed(2)}% | 10t=${momentum10.toFixed(2)}%`);
@@ -238,12 +239,12 @@ class TradingStrategy {
 
       // Show CE condition status
       if (Object.values(mtfCEConditions).filter(c => c === true).length < 5) {
-        logger.info(`   📋 CE Missing: ${mtfCEConditions.majority_rsi_bullish ? '' : 'RSI-Majority '} ${mtfCEConditions.trend_alignment ? '' : 'Trend '} ${mtfCEConditions.momentum_positive ? '' : 'Momentum '} ${mtfCEConditions.decent_confluence ? '' : 'Confluence '} ${mtfCEConditions.time_filter ? '' : 'Time'}`);
+        logger.info(`   📋 CE Missing: ${mtfCEConditions.majority_rsi_bullish ? '' : 'RSI-Strong '} ${mtfCEConditions.trend_alignment ? '' : 'Trend-Aligned '} ${mtfCEConditions.momentum_strong ? '' : 'Strong-Momentum '} ${mtfCEConditions.strong_confluence ? '' : 'High-Confluence '} ${mtfCEConditions.time_filter ? '' : 'Time'}`);
       }
 
       // Show PE condition status
       if (Object.values(mtfPEConditions).filter(c => c === true).length < 5) {
-        logger.info(`   📋 PE Missing: ${mtfPEConditions.majority_rsi_bearish ? '' : 'RSI-Majority '} ${mtfPEConditions.trend_alignment ? '' : 'Trend '} ${mtfPEConditions.momentum_negative ? '' : 'Momentum '} ${mtfPEConditions.decent_confluence ? '' : 'Confluence '} ${mtfPEConditions.time_filter ? '' : 'Time'}`);
+        logger.info(`   📋 PE Missing: ${mtfPEConditions.majority_rsi_bearish ? '' : 'RSI-Strong '} ${mtfPEConditions.trend_alignment ? '' : 'Trend-Aligned '} ${mtfPEConditions.momentum_strong ? '' : 'Strong-Momentum '} ${mtfPEConditions.strong_confluence ? '' : 'High-Confluence '} ${mtfPEConditions.time_filter ? '' : 'Time'}`);
       }
     }
 
@@ -316,21 +317,24 @@ class TradingStrategy {
     const rsi = this.calculateRSI(prices, 14);
     const bollinger = this.calculateBollingerBands(prices, 20, 2);
     const momentum = this.calculateMomentum(prices, 10);
+    const volatility = this.calculateAdaptiveVolatility(prices);
 
-    // RELAXED Strategy 1 Conditions: Bollinger Bands + RSI (No squeeze required)
+    // ✅ TIGHTENED Strategy 1 Conditions: Bollinger Bands + RSI (Quality over quantity)
     const bollingerCEConditions = {
-      price_near_lower_or_oversold: currentPrice <= bollinger.lower * 1.01 || rsi < 35, // Near lower band OR oversold
-      rsi_recovery_zone: rsi > 30 && rsi < 60, // Wider RSI range
-      trend_support: currentPrice > bollinger.middle * 0.995, // Above or near middle band
-      momentum_positive: momentum > 0.01, // Very low momentum - just 0.01%
+      price_near_lower_and_oversold: currentPrice <= bollinger.lower * 1.005 && rsi < 35, // Both conditions required
+      rsi_recovery_zone: rsi > 30 && rsi < 50, // Narrower RSI range
+      trend_support: currentPrice > bollinger.middle, // Must be above middle band
+      momentum_strong: momentum > 0.05, // 0.05% momentum requirement
+      squeeze_or_expansion: bollinger.squeeze || volatility.isExpanding, // Volatility condition
       time_filter: this.isWithinTradingHours(indexName)
     };
 
     const bollingerPEConditions = {
-      price_near_upper_or_overbought: currentPrice >= bollinger.upper * 0.99 || rsi > 65, // Near upper band OR overbought
-      rsi_decline_zone: rsi < 70 && rsi > 40, // Wider RSI range
-      trend_resistance: currentPrice < bollinger.middle * 1.005, // Below or near middle band
-      momentum_negative: momentum < -0.01, // Very low momentum - just -0.01%
+      price_near_upper_and_overbought: currentPrice >= bollinger.upper * 0.995 && rsi > 65, // Both conditions required  
+      rsi_decline_zone: rsi < 70 && rsi > 50, // Narrower RSI range
+      trend_resistance: currentPrice < bollinger.middle, // Must be below middle band
+      momentum_strong: momentum < -0.05, // -0.05% momentum requirement
+      squeeze_or_expansion: bollinger.squeeze || volatility.isExpanding, // Volatility condition
       time_filter: this.isWithinTradingHours(indexName)
     };
 
@@ -340,19 +344,19 @@ class TradingStrategy {
     // Log strategy 1 analysis every 15 seconds
     const shouldLogBollinger = Date.now() % 15000 < 1000;
     if (shouldLogBollinger || bollingerCEMet || bollingerPEMet) {
-      logger.info(`🎯 ${indexName} Bollinger+RSI Strategy (RELAXED):`);
+      logger.info(`🎯 ${indexName} Bollinger+RSI Strategy (TIGHTENED):`);
       logger.info(`   💰 Price: ${currentPrice} | BB Upper: ${bollinger.upper.toFixed(2)} | Middle: ${bollinger.middle.toFixed(2)} | Lower: ${bollinger.lower.toFixed(2)}`);
-      logger.info(`   📊 RSI: ${rsi.toFixed(2)} | Momentum: ${momentum.toFixed(2)}%`);
-      logger.info(`   📈 CE: ${Object.values(bollingerCEConditions).filter(c => c === true).length}/5 | PE: ${Object.values(bollingerPEConditions).filter(c => c === true).length}/5`);
+      logger.info(`   📊 RSI: ${rsi.toFixed(2)} | Momentum: ${momentum.toFixed(2)}% | Squeeze: ${bollinger.squeeze}`);
+      logger.info(`   📈 CE: ${Object.values(bollingerCEConditions).filter(c => c === true).length}/6 | PE: ${Object.values(bollingerPEConditions).filter(c => c === true).length}/6`);
 
       // Show CE condition status
-      if (Object.values(bollingerCEConditions).filter(c => c === true).length < 5) {
-        logger.info(`   📋 CE Missing: ${bollingerCEConditions.price_near_lower_or_oversold ? '' : 'Near-Lower '} ${bollingerCEConditions.rsi_recovery_zone ? '' : 'RSI-Zone '} ${bollingerCEConditions.trend_support ? '' : 'Support '} ${bollingerCEConditions.momentum_positive ? '' : 'Momentum '} ${bollingerCEConditions.time_filter ? '' : 'Time'}`);
+      if (Object.values(bollingerCEConditions).filter(c => c === true).length < 6) {
+        logger.info(`   📋 CE Missing: ${bollingerCEConditions.price_near_lower_and_oversold ? '' : 'Lower+Oversold '} ${bollingerCEConditions.rsi_recovery_zone ? '' : 'RSI-Zone '} ${bollingerCEConditions.trend_support ? '' : 'Support '} ${bollingerCEConditions.momentum_strong ? '' : 'Strong-Momentum '} ${bollingerCEConditions.squeeze_or_expansion ? '' : 'Volatility '} ${bollingerCEConditions.time_filter ? '' : 'Time'}`);
       }
 
       // Show PE condition status  
-      if (Object.values(bollingerPEConditions).filter(c => c === true).length < 5) {
-        logger.info(`   📋 PE Missing: ${bollingerPEConditions.price_near_upper_or_overbought ? '' : 'Near-Upper '} ${bollingerPEConditions.rsi_decline_zone ? '' : 'RSI-Zone '} ${bollingerPEConditions.trend_resistance ? '' : 'Resistance '} ${bollingerPEConditions.momentum_negative ? '' : 'Momentum '} ${bollingerPEConditions.time_filter ? '' : 'Time'}`);
+      if (Object.values(bollingerPEConditions).filter(c => c === true).length < 6) {
+        logger.info(`   📋 PE Missing: ${bollingerPEConditions.price_near_upper_and_overbought ? '' : 'Upper+Overbought '} ${bollingerPEConditions.rsi_decline_zone ? '' : 'RSI-Zone '} ${bollingerPEConditions.trend_resistance ? '' : 'Resistance '} ${bollingerPEConditions.momentum_strong ? '' : 'Strong-Momentum '} ${bollingerPEConditions.squeeze_or_expansion ? '' : 'Volatility '} ${bollingerPEConditions.time_filter ? '' : 'Time'}`);
       }
 
       // Strategy Analysis Update disabled for Telegram - user preference
@@ -443,18 +447,20 @@ class TradingStrategy {
     const supportResistance = this.calculateSupportResistance(prices);
     const momentum = this.calculateMomentum(prices, 5); // Shorter period for faster signals
 
-    // RELAXED Strategy 2: Price Action + Momentum (More practical)
+    // ✅ TIGHTENED Strategy 2: Price Action + Momentum (Higher quality setups)
     const priceActionCEConditions = {
-      price_momentum_bullish: momentum > 0.01 && rsi > 45, // Very low momentum requirement
-      trend_bullish: currentPrice > sma || rsi > 55, // Either above SMA OR strong RSI
-      not_overbought: rsi < 75, // Not extremely overbought
+      price_momentum_strong: momentum > 0.05 && rsi > 50, // 0.05% momentum requirement
+      trend_bullish: currentPrice > sma && rsi > 55, // Both conditions required (not OR)
+      near_support: supportResistance.nearSupport, // Must be near support level
+      not_overbought: rsi < 70, // Stricter overbought level
       time_filter: this.isWithinTradingHours(indexName)
     };
 
     const priceActionPEConditions = {
-      price_momentum_bearish: momentum < -0.01 && rsi < 55, // Very low momentum requirement
-      trend_bearish: currentPrice < sma || rsi < 45, // Either below SMA OR weak RSI
-      not_oversold: rsi > 25, // Not extremely oversold
+      price_momentum_strong: momentum < -0.05 && rsi < 50, // -0.05% momentum requirement
+      trend_bearish: currentPrice < sma && rsi < 45, // Both conditions required (not OR)
+      near_resistance: supportResistance.nearResistance, // Must be near resistance level
+      not_oversold: rsi > 30, // Stricter oversold level
       time_filter: this.isWithinTradingHours(indexName)
     };
 
@@ -464,19 +470,19 @@ class TradingStrategy {
     // Log strategy 2 analysis every 15 seconds
     const shouldLogAction = Date.now() % 15000 < 1000;
     if (shouldLogAction || actionCEMet || actionPEMet) {
-      logger.info(`🚀 ${indexName} Price Action Strategy (RELAXED):`);
+      logger.info(`🚀 ${indexName} Price Action Strategy (TIGHTENED):`);
       logger.info(`   💰 Price: ${currentPrice} | SMA: ${sma.toFixed(2)}`);
-      logger.info(`   📊 RSI: ${rsi.toFixed(2)} | Momentum: ${momentum.toFixed(2)}%`);
-      logger.info(`   📈 CE: ${Object.values(priceActionCEConditions).filter(c => c === true).length}/4 | PE: ${Object.values(priceActionPEConditions).filter(c => c === true).length}/4`);
+      logger.info(`   📊 RSI: ${rsi.toFixed(2)} | Momentum: ${momentum.toFixed(2)}% | S/R: ${supportResistance.nearSupport ? 'Support' : ''} ${supportResistance.nearResistance ? 'Resistance' : ''}`);
+      logger.info(`   📈 CE: ${Object.values(priceActionCEConditions).filter(c => c === true).length}/5 | PE: ${Object.values(priceActionPEConditions).filter(c => c === true).length}/5`);
 
       // Show CE condition status
-      if (Object.values(priceActionCEConditions).filter(c => c === true).length < 4) {
-        logger.info(`   📋 CE Missing: ${priceActionCEConditions.price_momentum_bullish ? '' : 'Bullish-Momentum '} ${priceActionCEConditions.trend_bullish ? '' : 'Bullish-Trend '} ${priceActionCEConditions.not_overbought ? '' : 'Not-Overbought '} ${priceActionCEConditions.time_filter ? '' : 'Time'}`);
+      if (Object.values(priceActionCEConditions).filter(c => c === true).length < 5) {
+        logger.info(`   📋 CE Missing: ${priceActionCEConditions.price_momentum_strong ? '' : 'Strong-Momentum '} ${priceActionCEConditions.trend_bullish ? '' : 'Strong-Trend '} ${priceActionCEConditions.near_support ? '' : 'Near-Support '} ${priceActionCEConditions.not_overbought ? '' : 'Not-Overbought '} ${priceActionCEConditions.time_filter ? '' : 'Time'}`);
       }
 
       // Show PE condition status
-      if (Object.values(priceActionPEConditions).filter(c => c === true).length < 4) {
-        logger.info(`   📋 PE Missing: ${priceActionPEConditions.price_momentum_bearish ? '' : 'Bearish-Momentum '} ${priceActionPEConditions.trend_bearish ? '' : 'Bearish-Trend '} ${priceActionPEConditions.not_oversold ? '' : 'Not-Oversold '} ${priceActionPEConditions.time_filter ? '' : 'Time'}`);
+      if (Object.values(priceActionPEConditions).filter(c => c === true).length < 5) {
+        logger.info(`   📋 PE Missing: ${priceActionPEConditions.price_momentum_strong ? '' : 'Strong-Momentum '} ${priceActionPEConditions.trend_bearish ? '' : 'Strong-Trend '} ${priceActionPEConditions.near_resistance ? '' : 'Near-Resistance '} ${priceActionPEConditions.not_oversold ? '' : 'Not-Oversold '} ${priceActionPEConditions.time_filter ? '' : 'Time'}`);
       }
     }
 
