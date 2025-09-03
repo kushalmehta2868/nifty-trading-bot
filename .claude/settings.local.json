@@ -16,7 +16,8 @@
       "mcp__ide__getDiagnostics",
       "WebFetch(domain:smartapi.angelone.in)",
       "WebFetch(domain:smartapi.angelbroking.com)",
-      "Bash(del test-option-tokens.ts)"
+      "Bash(del test-option-tokens.ts)",
+      "Bash(dir:*)"
     ],
     "deny": [],
     "ask": []

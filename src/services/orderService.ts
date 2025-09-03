@@ -61,16 +61,34 @@ class OrderService {
         return;
       }
 
-      // ✅ CHECK FOR EXISTING ACTIVE POSITIONS IN SAME INDEX
+      // ✅ CHECK FOR EXISTING ACTIVE POSITIONS IN SAME INDEX (only truly active orders)
       const existingPosition = this.activeOrders.find(order => 
         order.signal.indexName === signal.indexName && 
         (order.status === 'PLACED' || order.status === 'FILLED')
       );
 
+      // Log detailed check for debugging
+      logger.info(`🔍 Position check for ${signal.indexName}:`);
+      logger.info(`   Total orders in array: ${this.activeOrders.length}`);
+      const indexOrders = this.activeOrders.filter(order => order.signal.indexName === signal.indexName);
+      logger.info(`   Orders for ${signal.indexName}: ${indexOrders.length}`);
+      indexOrders.forEach(order => {
+        logger.info(`     Order ${order.orderId}: ${order.status} (${order.signal.optionType})`);
+      });
+      logger.info(`   Existing active position found: ${existingPosition ? 'YES' : 'NO'}`);
+
       if (existingPosition) {
         logger.warn(`❌ POSITION CONFLICT: ${signal.indexName} ${signal.optionType} signal blocked`);
         logger.warn(`   Existing: ${existingPosition.signal.optionType} (${existingPosition.status}) - Order ID: ${existingPosition.orderId}`);
         logger.warn(`   📋 Rule: Only one position per index allowed at a time`);
+        
+        // Emit position blocked event to inform strategy
+        (process as any).emit('positionBlocked', { 
+          signal, 
+          existingOrder: existingPosition,
+          reason: 'INDEX_ALREADY_ACTIVE' 
+        });
+        
         return;
       }
 
@@ -110,6 +128,8 @@ class OrderService {
         this.dailyTrades++;
         logger.info(`📄 PAPER ORDER PLACED: ${signal.optionSymbol} - Order ID: ${paperOrderId}`);
         logger.info(`📊 Paper Order Status: ${this.dailyTrades}/${config.trading.maxPositions} positions used`);
+        logger.info(`📋 ADDED ORDER to active list: ${paperOrderId} (${signal.indexName}_${signal.optionType})`);
+        logger.info(`📊 Active orders count: ${this.activeOrders.length} (after addition)`);
         
         // Fill paper order immediately (no artificial delays)
         setTimeout(() => {
@@ -144,6 +164,8 @@ class OrderService {
           logger.info(`   💰 Entry: ₹${signal.entryPrice} | Target: ₹${signal.target} | SL: ₹${signal.stopLoss}`);
           logger.info(`   📊 Position Status: ${this.dailyTrades}/${config.trading.maxPositions} real orders today`);
           logger.info(`   🤖 Angel One will automatically handle exits at target/SL levels`);
+          logger.info(`📋 ADDED ORDER to active list: ${orderResponse.data.orderid} (${signal.indexName}_${signal.optionType})`);
+          logger.info(`📊 Active orders count: ${this.activeOrders.length} (after addition)`);
 
           // Send confirmation to Telegram
           (process as any).emit('orderPlaced', { signal, orderId: orderResponse.data.orderid, isPaperTrade: false });
@@ -301,12 +323,26 @@ class OrderService {
   // Strike is calculated in strategy.ts with premium control and passed via signal.optionSymbol
 
   private startOrderMonitoring(): void {
+    let cycleCount = 0;
+    
     // Check order status every 3 seconds for optimal balance of speed and safety
     this.monitoringInterval = setInterval(async () => {
+      cycleCount++;
+      
       await this.checkOrderStatus();
+      
+      // Run stale order cleanup every 30 cycles (90 seconds)
+      if (cycleCount % 30 === 0) {
+        this.cleanupStaleOrders();
+      }
+      
+      // Log detailed active orders status every 20 cycles (60 seconds)
+      if (cycleCount % 20 === 0) {
+        this.logActiveOrdersStatus();
+      }
     }, 3000);
 
-    logger.info('🔍 Order monitoring started - checking every 3 seconds (optimal mode)');
+    logger.info('🔍 Order monitoring started - checking every 3s, logging every 60s, cleanup every 90s');
   }
 
   private async checkOrderStatus(): Promise<void> {
@@ -472,6 +508,9 @@ class OrderService {
 
         // Send exit notification immediately
         this.sendExitNotification(activeOrder);
+
+        // ✅ CRITICAL FIX: Remove completed order from activeOrders array
+        this.removeOrderFromActiveList(activeOrder.orderId, 'EXIT_COMPLETED');
       }
     } catch (error) {
       logger.error('CRITICAL: Error checking for exits in trade book:', (error as Error).message);
@@ -597,6 +636,44 @@ ${pnlColor} P&L: ₹${order.pnl?.toFixed(2)} | Daily: ₹${this.dailyPnL.toFixed
     return [...this.activeOrders];
   }
 
+  public logActiveOrdersStatus(): void {
+    const timestamp = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' });
+    
+    logger.info(`📊 ACTIVE ORDERS STATUS @ ${timestamp}:`);
+    logger.info(`   Total active orders: ${this.activeOrders.length}`);
+    
+    if (this.activeOrders.length === 0) {
+      logger.info(`   ✅ No active orders - all positions available`);
+      return;
+    }
+    
+    // Group by index and status
+    const byIndex: { [key: string]: ActiveOrder[] } = {};
+    this.activeOrders.forEach(order => {
+      const key = order.signal.indexName;
+      if (!byIndex[key]) byIndex[key] = [];
+      byIndex[key].push(order);
+    });
+    
+    Object.keys(byIndex).forEach(indexName => {
+      const orders = byIndex[indexName];
+      logger.info(`   📈 ${indexName}: ${orders.length} orders`);
+      
+      orders.forEach(order => {
+        const age = Math.floor((Date.now() - order.timestamp.getTime()) / 60000);
+        logger.info(`      ${order.orderId}: ${order.status} (${order.signal.optionType}) - Age: ${age}min`);
+      });
+    });
+    
+    // Show which indices are blocked
+    const blockedIndices = Object.keys(byIndex).filter(indexName => 
+      byIndex[indexName].some(order => order.status === 'PLACED' || order.status === 'FILLED')
+    );
+    
+    logger.info(`   🔒 BLOCKED indices: ${blockedIndices.length > 0 ? blockedIndices.join(', ') : 'None'}`);
+    logger.info(`   🔓 AVAILABLE indices: ${['NIFTY', 'BANKNIFTY'].filter(i => !blockedIndices.includes(i)).join(', ') || 'None'}`);
+  }
+
   public async cancelOrder(orderId: string): Promise<boolean> {
     try {
       const orderIndex = this.activeOrders.findIndex(order => order.orderId === orderId);
@@ -616,6 +693,9 @@ ${pnlColor} P&L: ₹${order.pnl?.toFixed(2)} | Daily: ₹${this.dailyPnL.toFixed
         // Emit cancellation event to unlock position in strategy
         (process as any).emit('orderCancelled', { order });
         
+        // ✅ CRITICAL FIX: Remove cancelled order from activeOrders array
+        this.removeOrderFromActiveList(orderId, 'PAPER_CANCELLED');
+        
         return true;
       }
 
@@ -632,6 +712,9 @@ ${pnlColor} P&L: ₹${order.pnl?.toFixed(2)} | Daily: ₹${this.dailyPnL.toFixed
         
         // Emit cancellation event to unlock position in strategy
         (process as any).emit('orderCancelled', { order });
+        
+        // ✅ CRITICAL FIX: Remove cancelled order from activeOrders array
+        this.removeOrderFromActiveList(orderId, 'REAL_CANCELLED');
         
         return true;
       } else {
@@ -732,30 +815,43 @@ ${pnlColor} P&L: ₹${order.pnl?.toFixed(2)} | Daily: ₹${this.dailyPnL.toFixed
 
       const currentPrice = await angelAPI.getOptionPrice(activeOrder.signal.optionSymbol, symbolToken);
       
-      if (!currentPrice) {
-        logger.debug(`Could not get current price for ${activeOrder.signal.optionSymbol} - skipping exit check`);
+      if (!currentPrice || currentPrice <= 0) {
+        logger.debug(`Could not get valid current price for ${activeOrder.signal.optionSymbol} (price: ${currentPrice}) - skipping exit check`);
+        return;
+      }
+      
+      // Additional validation - ensure current price is reasonable relative to entry price
+      const entryPrice = activeOrder.entryPrice || activeOrder.signal.entryPrice;
+      const priceRatio = currentPrice / entryPrice;
+      
+      if (priceRatio > 10 || priceRatio < 0.1) {
+        logger.warn(`⚠️ Suspicious price ratio for ${activeOrder.signal.optionSymbol}: Current ₹${currentPrice} vs Entry ₹${entryPrice} (ratio: ${priceRatio.toFixed(2)}) - skipping exit check`);
         return;
       }
 
       const target = activeOrder.signal.target;
       const stopLoss = activeOrder.signal.stopLoss;
-      const entryPrice = activeOrder.entryPrice || activeOrder.signal.entryPrice;
 
-      // Check if current market price hit target or stop loss
+      // Check if current market price hit target or stop loss with realistic exit logic
       let shouldExit = false;
       let exitPrice: number = 0;
       let exitReason: 'TARGET' | 'STOPLOSS' = 'TARGET';
 
+      // ✅ REALISTIC PAPER TRADING EXIT LOGIC
       if (currentPrice >= target) {
-        // Target hit
+        // Target hit - exit at current market price with small slippage simulation
         shouldExit = true;
-        exitPrice = target;
+        const slippage = currentPrice * 0.001; // 0.1% slippage (slightly worse than target)
+        exitPrice = Math.max(target, currentPrice - slippage); // Don't exit below target
         exitReason = 'TARGET';
+        logger.info(`📄 Paper trade target hit: Current ₹${currentPrice} >= Target ₹${target}, Exit at ₹${exitPrice} (with slippage)`);
       } else if (currentPrice <= stopLoss) {
-        // Stop loss hit
+        // Stop loss hit - exit at current market price with slippage simulation
         shouldExit = true;
-        exitPrice = stopLoss;
+        const slippage = currentPrice * 0.002; // 0.2% slippage (worse execution on SL)
+        exitPrice = Math.min(stopLoss, currentPrice - slippage); // Don't exit above stop loss
         exitReason = 'STOPLOSS';
+        logger.info(`📄 Paper trade stop loss hit: Current ₹${currentPrice} <= SL ₹${stopLoss}, Exit at ₹${exitPrice} (with slippage)`);
       }
 
       if (shouldExit) {
@@ -781,8 +877,17 @@ ${pnlColor} P&L: ₹${order.pnl?.toFixed(2)} | Daily: ₹${this.dailyPnL.toFixed
 
         // Send exit notification
         this.sendExitNotification(activeOrder);
+
+        // ✅ CRITICAL FIX: Remove completed order from activeOrders array
+        this.removeOrderFromActiveList(activeOrder.orderId, 'PAPER_EXIT_COMPLETED');
       } else {
-        logger.debug(`📄 ${activeOrder.signal.optionSymbol}: Current ₹${currentPrice.toFixed(2)} (Target: ₹${target}, SL: ₹${stopLoss})`);
+        // Log paper trade monitoring (less frequent to avoid spam)
+        const shouldLog = Date.now() % 30000 < 3000; // Log every 30 seconds
+        if (shouldLog) {
+          const targetDistance = ((currentPrice - target) / target * 100).toFixed(2);
+          const slDistance = ((currentPrice - stopLoss) / stopLoss * 100).toFixed(2);
+          logger.info(`📄 ${activeOrder.signal.optionSymbol}: Current ₹${currentPrice.toFixed(2)} | Target: ₹${target} (${targetDistance}%) | SL: ₹${stopLoss} (${slDistance}%)`);
+        }
       }
 
     } catch (error) {
@@ -798,6 +903,64 @@ ${pnlColor} P&L: ₹${order.pnl?.toFixed(2)} | Daily: ₹${this.dailyPnL.toFixed
     if (confidence >= 90) return 'Multi-Timeframe Confluence';
     if (confidence >= 80) return 'Bollinger+RSI';
     return 'Price Action+Momentum';
+  }
+
+  private removeOrderFromActiveList(orderId: string, reason: string): void {
+    const orderIndex = this.activeOrders.findIndex(order => order.orderId === orderId);
+    
+    if (orderIndex !== -1) {
+      const removedOrder = this.activeOrders[orderIndex];
+      this.activeOrders.splice(orderIndex, 1);
+      
+      logger.info(`🗑️ REMOVED ORDER from active list: ${orderId} - ${reason}`);
+      logger.info(`📊 Active orders count: ${this.activeOrders.length} (after removal)`);
+      
+      // Log detailed active orders status
+      const remainingOrders = this.activeOrders.map(order => 
+        `${order.signal.indexName}_${order.signal.optionType}:${order.status}`
+      ).join(', ');
+      
+      logger.info(`📋 Remaining active orders: ${remainingOrders || 'None'}`);
+    } else {
+      logger.warn(`⚠️ Order ${orderId} not found in activeOrders list for removal (${reason})`);
+    }
+  }
+
+  public cleanupStaleOrders(): void {
+    const now = Date.now();
+    const staleThreshold = 2 * 60 * 60 * 1000; // 2 hours
+    
+    const staleOrders = this.activeOrders.filter(order => {
+      const orderAge = now - order.timestamp.getTime();
+      return orderAge > staleThreshold && (order.status === 'PLACED' || order.status === 'FILLED');
+    });
+    
+    if (staleOrders.length > 0) {
+      logger.warn(`🧹 Found ${staleOrders.length} stale orders (>2 hours old):`);
+      
+      staleOrders.forEach(order => {
+        logger.warn(`   Stale: ${order.orderId} (${order.signal.indexName}_${order.signal.optionType}) - Age: ${Math.floor((now - order.timestamp.getTime()) / 60000)} minutes`);
+        
+        // Force remove stale orders and emit exit event to unlock positions
+        this.removeOrderFromActiveList(order.orderId, 'STALE_ORDER_CLEANUP');
+        (process as any).emit('orderExited', { order: { signal: order.signal }, message: 'Stale order cleanup' });
+      });
+    } else {
+      logger.info('✅ No stale orders found');
+    }
+  }
+
+  public forceCleanActiveOrders(): void {
+    logger.warn(`🔧 FORCE CLEANING ${this.activeOrders.length} active orders`);
+    
+    // Emit exit events for all remaining orders to unlock positions
+    this.activeOrders.forEach(order => {
+      logger.warn(`   Force removing: ${order.orderId} (${order.signal.indexName}_${order.signal.optionType}) - Status: ${order.status}`);
+      (process as any).emit('orderExited', { order: { signal: order.signal }, message: 'Force cleanup' });
+    });
+    
+    this.activeOrders = [];
+    logger.info('🧹 All active orders force cleaned - positions unlocked');
   }
 
   public resetDailyStats(): void {

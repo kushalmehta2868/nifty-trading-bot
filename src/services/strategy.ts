@@ -25,6 +25,7 @@ class TradingStrategy {
   private activePositions: { [key: string]: boolean } = {}; // Track active positions per index
   private cleanupInterval: NodeJS.Timeout | null = null;
   private positionLoggingInterval: NodeJS.Timeout | null = null;
+  private eventHandlers: Map<string, Function> = new Map(); // Track event handlers for cleanup
   public priceBuffers: PriceBuffers = {
     NIFTY: [],
     BANKNIFTY: []
@@ -35,52 +36,64 @@ class TradingStrategy {
     logger.info('🎯 Trading strategy initializing...');
 
     // Listen for order placement and exits to track active positions
-    (process as any).on('orderPlaced', (data: any) => {
+    const orderPlacedHandler = (data: any) => {
       const indexName = data.signal.indexName;
       this.activePositions[indexName] = true;
       logger.info(`🔒 POSITION LOCKED: ${indexName} - blocking new signals`);
       this.logActivePositionsStatus('ORDER_PLACED');
-    });
+    };
+    (process as any).on('orderPlaced', orderPlacedHandler);
+    this.eventHandlers.set('orderPlaced', orderPlacedHandler);
 
-    (process as any).on('orderExited', (data: any) => {
+    const orderExitedHandler = (data: any) => {
       const indexName = data.order.signal.indexName;
       this.activePositions[indexName] = false;
       logger.info(`🔓 POSITION UNLOCKED: ${indexName} - allowing new signals`);
       this.logActivePositionsStatus('ORDER_EXITED');
-    });
+    };
+    (process as any).on('orderExited', orderExitedHandler);
+    this.eventHandlers.set('orderExited', orderExitedHandler);
 
     // Listen for order cancellations to unlock positions
-    (process as any).on('orderCancelled', (data: any) => {
+    const orderCancelledHandler = (data: any) => {
       const indexName = data.order.signal.indexName;
       this.activePositions[indexName] = false;
       logger.info(`🔓 POSITION UNLOCKED after cancellation: ${indexName} - allowing new signals`);
       this.logActivePositionsStatus('ORDER_CANCELLED');
-    });
+    };
+    (process as any).on('orderCancelled', orderCancelledHandler);
+    this.eventHandlers.set('orderCancelled', orderCancelledHandler);
 
     // Listen for order rejections/failures to unlock positions
-    (process as any).on('orderRejected', (data: any) => {
+    const orderRejectedHandler = (data: any) => {
       const indexName = data.signal.indexName;
       this.activePositions[indexName] = false;
       logger.info(`🔓 POSITION UNLOCKED after rejection: ${indexName} - allowing new signals`);
       logger.error(`💥 Order rejected: ${data.reason}`);
       this.logActivePositionsStatus('ORDER_REJECTED');
-    });
+    };
+    (process as any).on('orderRejected', orderRejectedHandler);
+    this.eventHandlers.set('orderRejected', orderRejectedHandler);
 
-    (process as any).on('orderFailed', (data: any) => {
+    const orderFailedHandler = (data: any) => {
       const indexName = data.signal.indexName;
       this.activePositions[indexName] = false;
       logger.info(`🔓 POSITION UNLOCKED after failure: ${indexName} - allowing new signals`);
       logger.error(`💥 Order failed: ${data.reason}`);
       this.logActivePositionsStatus('ORDER_FAILED');
-    });
+    };
+    (process as any).on('orderFailed', orderFailedHandler);
+    this.eventHandlers.set('orderFailed', orderFailedHandler);
 
-    (process as any).on('signalExecutionFailed', (data: any) => {
+    const signalExecutionFailedHandler = (data: any) => {
       const indexName = data.signal.indexName;
       this.activePositions[indexName] = false;
       logger.info(`🔓 POSITION UNLOCKED after signal execution failure: ${indexName} - allowing new signals`);
       logger.error(`💥 Signal execution failed: ${data.reason}`);
       this.logActivePositionsStatus('SIGNAL_EXECUTION_FAILED');
-    });
+    };
+    (process as any).on('signalExecutionFailed', signalExecutionFailedHandler);
+    this.eventHandlers.set('signalExecutionFailed', signalExecutionFailedHandler);
 
     // Start cleanup mechanism for old signal times (every hour)
     this.startCleanupProcess();
@@ -1414,6 +1427,13 @@ class TradingStrategy {
   }
 
   public stop(): void {
+    // Clean up event listeners
+    this.eventHandlers.forEach((handler, event) => {
+      (process as any).removeListener(event, handler);
+      logger.debug(`🧹 Removed event listener: ${event}`);
+    });
+    this.eventHandlers.clear();
+    
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval);
       this.cleanupInterval = null;
@@ -1425,6 +1445,8 @@ class TradingStrategy {
       this.positionLoggingInterval = null;
       logger.info('📊 Position status logging stopped');
     }
+    
+    logger.info('✅ Strategy stopped and cleaned up');
   }
 }
 
