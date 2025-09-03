@@ -211,7 +211,7 @@ class TradingStrategy {
     const mtfCEConditions = {
       majority_rsi_bullish: (+((rsi1 > 55)) + (+(rsi5 > 55)) + (+(rsi10 > 55))) >= 2, // Stronger RSI requirement
       trend_alignment: currentPrice > sma1 && sma1 >= sma5 && sma5 >= sma10, // Strict trend alignment
-      momentum_strong: momentum1 > 0.05 && momentum5 > 0.05, // 0.05% momentum requirement
+      momentum_strong: momentum1 > 0.01 && momentum5 > 0.01, // 0.01% momentum requirement
       strong_confluence: confluenceScore >= 70, // Higher confluence requirement
       time_filter: this.isWithinTradingHours(indexName)
     };
@@ -220,7 +220,7 @@ class TradingStrategy {
     const mtfPEConditions = {
       majority_rsi_bearish: (+((rsi1 < 45)) + (+(rsi5 < 45)) + (+(rsi10 < 45))) >= 2, // Stronger RSI requirement
       trend_alignment: currentPrice < sma1 && sma1 <= sma5 && sma5 <= sma10, // Strict trend alignment
-      momentum_strong: momentum1 < -0.05 && momentum5 < -0.05, // -0.05% momentum requirement
+      momentum_strong: momentum1 < -0.01 && momentum5 < -0.01, // -0.01% momentum requirement
       strong_confluence: confluenceScore >= 70, // Higher confluence requirement
       time_filter: this.isWithinTradingHours(indexName)
     };
@@ -328,7 +328,7 @@ class TradingStrategy {
       price_near_lower_and_oversold: currentPrice <= bollinger.lower * 1.005 && rsi < 35, // Both conditions required
       rsi_recovery_zone: rsi > 30 && rsi < 50, // Narrower RSI range
       trend_support: currentPrice > bollinger.middle, // Must be above middle band
-      momentum_strong: momentum > 0.05, // 0.05% momentum requirement
+      momentum_strong: momentum > 0.01, // 0.01% momentum requirement
       squeeze_or_expansion: bollinger.squeeze || volatility.isExpanding, // Volatility condition
       time_filter: this.isWithinTradingHours(indexName)
     };
@@ -337,7 +337,7 @@ class TradingStrategy {
       price_near_upper_and_overbought: currentPrice >= bollinger.upper * 0.995 && rsi > 65, // Both conditions required  
       rsi_decline_zone: rsi < 70 && rsi > 50, // Narrower RSI range
       trend_resistance: currentPrice < bollinger.middle, // Must be below middle band
-      momentum_strong: momentum < -0.05, // -0.05% momentum requirement
+      momentum_strong: momentum < -0.01, // -0.01% momentum requirement
       squeeze_or_expansion: bollinger.squeeze || volatility.isExpanding, // Volatility condition
       time_filter: this.isWithinTradingHours(indexName)
     };
@@ -457,7 +457,7 @@ class TradingStrategy {
 
     // ✅ TIGHTENED Strategy 2: Price Action + Momentum (Higher quality setups)
     const priceActionCEConditions = {
-      price_momentum_strong: momentum > 0.05 && rsi > 50, // 0.05% momentum requirement
+      price_momentum_strong: momentum > 0.01 && rsi > 50, // 0.01% momentum requirement
       trend_bullish: currentPrice > sma && rsi > 55, // Both conditions required (not OR)
       near_support: supportResistance.nearSupport, // Must be near support level
       not_overbought: rsi < 70, // Stricter overbought level
@@ -465,7 +465,7 @@ class TradingStrategy {
     };
 
     const priceActionPEConditions = {
-      price_momentum_strong: momentum < -0.05 && rsi < 50, // -0.05% momentum requirement
+      price_momentum_strong: momentum < -0.01 && rsi < 50, // -0.01% momentum requirement
       trend_bearish: currentPrice < sma && rsi < 45, // Both conditions required (not OR)
       near_resistance: supportResistance.nearResistance, // Must be near resistance level
       not_oversold: rsi > 30, // Stricter oversold level
@@ -1220,7 +1220,7 @@ class TradingStrategy {
 
         const s2Ready = Object.values({
           nearLevels: supportResistance.nearSupport || supportResistance.nearResistance,
-          strongMomentum: Math.abs(momentum) > 0.2,
+          strongMomentum: Math.abs(momentum) > 0.01,
           rsiZone: rsi > 30 && rsi < 70
         }).filter(c => c === true).length;
 
