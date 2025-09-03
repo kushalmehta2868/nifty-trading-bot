@@ -1,16 +1,14 @@
-import { webSocketFeed } from './webSocketFeed';
-import { angelAPI } from './angelAPI';
 import { config } from '../config/config';
+import {
+  IndexName,
+  OptionType,
+  PriceUpdate,
+  TradingSignal
+} from '../types';
 import { logger } from '../utils/logger';
 import { isMarketOpen } from '../utils/marketHours';
-import {
-  TradingSignal,
-  PriceUpdate,
-  IndexName,
-  Direction,
-  OptionType,
-  TechnicalIndicators
-} from '../types';
+import { angelAPI } from './angelAPI';
+import { webSocketFeed } from './webSocketFeed';
 
 interface PriceBufferItem {
   price: number;
@@ -669,7 +667,7 @@ class TradingStrategy {
 
     } catch (error) {
       logger.error('Error in executeSignal:', (error as Error).message);
-      
+
       // ✅ CRITICAL FIX: Emit signal execution failure to unlock position
       (process as any).emit('signalExecutionFailed', { signal, reason: (error as Error).message });
     }
@@ -681,7 +679,7 @@ class TradingStrategy {
 
       // Generate expiry string with index-specific logic
       const expiry = this.generateExpiryString(signal.indexName);
-      
+
       // ✅ Extract strike from the already generated option symbol instead of recalculating
       const strike = this.extractStrikeFromSymbol(signal.optionSymbol, signal.indexName);
 
@@ -720,30 +718,30 @@ class TradingStrategy {
 
   private generateExpiryString(indexName?: IndexName): string {
     const today = new Date();
-    
+
     if (indexName === 'BANKNIFTY') {
       // BANKNIFTY: Monthly expiry only (no weekly since Nov 2024)
       // Expiry: Last day of the month
       const currentMonth = today.getMonth();
       const currentYear = today.getFullYear();
-      
+
       // Get last day of current month
       let lastDayOfMonth = new Date(currentYear, currentMonth + 1, 0);
-      
+
       // If last day of month is today or has passed, move to next month
       if (lastDayOfMonth <= today) {
         const nextMonth = currentMonth + 1;
         const nextYear = nextMonth > 11 ? currentYear + 1 : currentYear;
         const adjustedMonth = nextMonth > 11 ? 0 : nextMonth;
-        
+
         lastDayOfMonth = new Date(nextYear, adjustedMonth + 1, 0);
       }
-      
+
       const day = lastDayOfMonth.getDate().toString().padStart(2, '0');
       const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
       const month = months[lastDayOfMonth.getMonth()];
       const year = lastDayOfMonth.getFullYear().toString().slice(-2);
-      
+
       return `${day}${month}${year}`;
     } else {
       // NIFTY: Weekly expiry on Tuesday (changed from Thursday since Sept 1, 2025)
@@ -809,8 +807,8 @@ class TradingStrategy {
 
   // ✅ NEW: Premium-based strike selection with 15k position limit
   private async calculateOptimalStrike(
-    spotPrice: number, 
-    indexName: IndexName, 
+    spotPrice: number,
+    indexName: IndexName,
     optionType: OptionType,
     expiry: string
   ): Promise<{ strike: number; estimatedPremium: number }> {
@@ -837,7 +835,7 @@ class TradingStrategy {
 
     // Calculate days to expiry for premium estimation
     const daysToExpiry = this.calculateDaysToExpiry(expiry);
-    
+
     // Start with 1 strike OTM and move further if premium is too high
     let strike: number;
     let strikesAway = 1;
@@ -853,15 +851,15 @@ class TradingStrategy {
 
       // Estimate premium based on distance from spot and time value
       estimatedPremium = this.estimateOptionPremium(
-        spotPrice, 
-        strike, 
-        optionType, 
-        daysToExpiry, 
+        spotPrice,
+        strike,
+        optionType,
+        daysToExpiry,
         indexName
       );
 
       const positionValue = estimatedPremium * lotSize;
-      
+
       logger.info(`${indexName} ${optionType} Strike ${strike}: Est Premium ₹${estimatedPremium.toFixed(2)}, Position Value ₹${positionValue.toFixed(0)} (${strikesAway} strikes OTM)`);
 
       if (positionValue <= maxPositionValue) {
@@ -890,10 +888,10 @@ class TradingStrategy {
 
       const expiryDate = new Date(year, month, day);
       const today = new Date();
-      
+
       const diffTime = expiryDate.getTime() - today.getTime();
       const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-      
+
       return Math.max(0, diffDays);
     } catch (error) {
       logger.warn(`Could not parse expiry ${expiry}, assuming 7 days`);
@@ -921,19 +919,19 @@ class TradingStrategy {
     // Higher volatility for BANKNIFTY, more time value for longer expiry
     const volatilityFactor = indexName === 'BANKNIFTY' ? 0.25 : 0.20; // 25% vs 20% annualized
     const timeValueBase = Math.sqrt(daysToExpiry / 365) * volatilityFactor * spotPrice * 0.1; // Rough approximation
-    
+
     // Distance penalty - options further away have less time value per rupee
     const distanceFromSpot = Math.abs(spotPrice - strike) / spotPrice;
     const distancePenalty = Math.exp(-distanceFromSpot * 3); // Exponential decay
-    
+
     const timeValue = timeValueBase * distancePenalty;
-    
+
     // Total premium (never less than intrinsic value)
     const totalPremium = Math.max(intrinsicValue + timeValue, intrinsicValue);
-    
+
     // Minimum premium for very OTM options (market makers need some profit)
     const minimumPremium = indexName === 'BANKNIFTY' ? 20 : 10; // Minimum ₹20 for BankNifty, ₹10 for Nifty
-    
+
     return Math.max(totalPremium, minimumPremium);
   }
 
@@ -945,17 +943,17 @@ class TradingStrategy {
       const indexNameLength = indexName.length;
       const expiryLength = 7; // Format: 03SEP25
       const typeLength = 2; // CE or PE
-      
+
       const symbolWithoutIndex = optionSymbol.substring(indexNameLength);
       const symbolWithoutExpiry = symbolWithoutIndex.substring(expiryLength);
       const strikeWithType = symbolWithoutExpiry.substring(0, symbolWithoutExpiry.length - typeLength);
-      
+
       return parseInt(strikeWithType);
     } catch (error) {
       logger.error(`Failed to extract strike from ${optionSymbol}, using fallback calculation`);
       // Fallback to ATM calculation
-      const baseStrike = indexName === 'BANKNIFTY' ? 
-        Math.round(25000 / 100) * 100 : 
+      const baseStrike = indexName === 'BANKNIFTY' ?
+        Math.round(25000 / 100) * 100 :
         Math.round(25000 / 50) * 50;
       return baseStrike;
     }
@@ -1236,7 +1234,7 @@ class TradingStrategy {
       // Add WebSocket connection status
       const wsStatus = webSocketFeed.getConnectionStatus();
       summary += `🔗 WebSocket: ${wsStatus.connected ? '✅ Connected' : '❌ Disconnected'} | Healthy: ${wsStatus.healthy}\n`;
-      
+
       // Add position and cooldown status
       const positions = this.getPositionStatus();
       const cooldowns = this.getSignalCooldowns();
@@ -1353,11 +1351,11 @@ class TradingStrategy {
     const timestamp = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' });
     const lockedPositions = Object.keys(this.activePositions).filter(k => this.activePositions[k]);
     const unlockedPositions = Object.keys(this.activePositions).filter(k => !this.activePositions[k]);
-    
+
     logger.info(`📊 ACTIVE POSITIONS STATUS [${event}] @ ${timestamp}:`);
     logger.info(`   🔒 LOCKED: ${lockedPositions.length > 0 ? lockedPositions.join(', ') : 'None'}`);
     logger.info(`   🔓 UNLOCKED: ${unlockedPositions.length > 0 ? unlockedPositions.join(', ') : 'None'}`);
-    
+
     // Enhanced logging for debugging
     const allIndices = ['NIFTY', 'BANKNIFTY'];
     logger.info(`   📋 DETAILED STATUS:`);
@@ -1370,28 +1368,28 @@ class TradingStrategy {
   public getSignalCooldowns(): { [key: string]: number } {
     const now = Date.now();
     const cooldowns: { [key: string]: number } = {};
-    
+
     Object.keys(this.lastSignalTime).forEach(key => {
       const remaining = Math.max(0, config.trading.signalCooldown - (now - this.lastSignalTime[key]));
       if (remaining > 0) {
         cooldowns[key] = Math.ceil(remaining / 1000); // Convert to seconds
       }
     });
-    
+
     return cooldowns;
   }
 
   public resetPositions(): void {
     const lockedPositions = Object.keys(this.activePositions).filter(k => this.activePositions[k]);
-    
+
     if (lockedPositions.length > 0) {
       logger.warn(`🔧 Manually resetting ${lockedPositions.length} locked positions: ${lockedPositions.join(', ')}`);
-      
+
       lockedPositions.forEach(indexName => {
         this.activePositions[indexName] = false;
         logger.info(`🔓 Force unlocked: ${indexName}`);
       });
-      
+
       this.logActivePositionsStatus('MANUAL_RESET');
     } else {
       logger.info(`✅ No locked positions to reset`);
@@ -1401,7 +1399,7 @@ class TradingStrategy {
 
   public resetCooldowns(): void {
     const activeCooldowns = Object.keys(this.getSignalCooldowns());
-    
+
     if (activeCooldowns.length > 0) {
       logger.warn(`🔧 Manually resetting ${activeCooldowns.length} active cooldowns: ${activeCooldowns.join(', ')}`);
       this.lastSignalTime = {};
@@ -1421,7 +1419,7 @@ class TradingStrategy {
       this.cleanupInterval = null;
       logger.info('🧹 Strategy cleanup process stopped');
     }
-    
+
     if (this.positionLoggingInterval) {
       clearInterval(this.positionLoggingInterval);
       this.positionLoggingInterval = null;
