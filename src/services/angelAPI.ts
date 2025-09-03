@@ -306,8 +306,8 @@ class AngelAPI {
   ): Promise<any> {
     return this.makeRequest('/rest/secure/angelbroking/order/v1/getLTP', 'POST', {
       exchange,
-      tradingSymbol,
-      symbolToken
+      tradingsymbol: tradingSymbol,
+      symboltoken: symbolToken
     });
   }
 
@@ -318,7 +318,7 @@ class AngelAPI {
   ): Promise<any> {
     try {
       logger.info(`🔍 Searching scrips: exchange=${exchange}, symbol=${searchtext}`);
-      
+
       // ✅ Fixed parameter name from 'searchtext' to 'searchscrip'
       const response = await this.makeRequest('/rest/secure/angelbroking/order/v1/searchScrip', 'POST', {
         exchange,
@@ -359,7 +359,7 @@ class AngelAPI {
   ): Promise<any> {
     try {
       logger.info(`🔄 Fallback: Searching via master data for "${searchtext}" on ${exchange}`);
-      
+
       const response = await axios.get('https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json');
       const masterData = response.data;
 
@@ -374,7 +374,7 @@ class AngelAPI {
 
       if (matches.length > 0) {
         logger.info(`✅ Found ${matches.length} matches via master data`);
-        
+
         // Convert to Angel API response format
         const formattedResponse = {
           status: true,
@@ -458,7 +458,7 @@ class AngelAPI {
     try {
       // ✅ Format expiry correctly (DDMMMYY format like 12SEP24)
       const formattedExpiry = this.formatExpiryDate(expiry);
-      
+
       // ✅ Use correct symbol naming based on research
       let baseSymbol = indexName;
       if (indexName === 'BANKNIFTY') {
@@ -560,7 +560,7 @@ class AngelAPI {
     if (expiry.match(/^\d{2}[A-Z]{3}\d{2}$/)) {
       return expiry; // Already in correct format
     }
-    
+
     // Handle formats like "2024-09-12" or "12/09/2024"
     if (expiry.includes('-') || expiry.includes('/')) {
       const date = new Date(expiry);
@@ -590,12 +590,12 @@ class AngelAPI {
       // Filter for the specific option
       const options = masterData.filter((item: any) => {
         return item.exch_seg === 'NFO' &&
-               item.name &&
-               item.name.includes(baseSymbol) &&
-               item.instrumenttype === 'OPTIDX' &&
-               item.name.includes(expiry) &&
-               item.name.includes(strike.toString()) &&
-               item.name.includes(optionType || '');
+          item.name &&
+          item.name.includes(baseSymbol) &&
+          item.instrumenttype === 'OPTIDX' &&
+          item.name.includes(expiry) &&
+          item.name.includes(strike.toString()) &&
+          item.name.includes(optionType || '');
       });
 
       if (options.length > 0) {
@@ -607,11 +607,11 @@ class AngelAPI {
       // Try partial matching
       const partialOptions = masterData.filter((item: any) => {
         return item.exch_seg === 'NFO' &&
-               item.name &&
-               item.name.includes(baseSymbol) &&
-               item.instrumenttype === 'OPTIDX' &&
-               item.name.includes(strike.toString()) &&
-               item.name.includes(optionType || '');
+          item.name &&
+          item.name.includes(baseSymbol) &&
+          item.instrumenttype === 'OPTIDX' &&
+          item.name.includes(strike.toString()) &&
+          item.name.includes(optionType || '');
       });
 
       if (partialOptions.length > 0) {
@@ -645,7 +645,7 @@ class AngelAPI {
       // ✅ Test current expiry options
       const currentDate = new Date();
       const currentExpiry = this.formatExpiryDate(currentDate.toISOString());
-      
+
       logger.info(`📅 Using current expiry format: ${currentExpiry}`);
 
       // Test BANKNIFTY options search
@@ -685,18 +685,18 @@ class AngelAPI {
       // ✅ Find current NIFTY options
       const niftyOptions = masterData.filter((item: any) => {
         return item.exch_seg === 'NFO' &&
-               item.name &&
-               item.name.includes('NIFTY') &&
-               item.instrumenttype === 'OPTIDX' &&
-               !item.name.includes('BANK'); // Exclude BANKNIFTY
+          item.name &&
+          item.name.includes('NIFTY') &&
+          item.instrumenttype === 'OPTIDX' &&
+          !item.name.includes('BANK'); // Exclude BANKNIFTY
       });
 
       // ✅ Find current BANKNIFTY options
       const bankniftyOptions = masterData.filter((item: any) => {
         return item.exch_seg === 'NFO' &&
-               item.name &&
-               (item.name.includes('BANKNIFTY') || item.name.includes('NIFTY BANK')) &&
-               item.instrumenttype === 'OPTIDX';
+          item.name &&
+          (item.name.includes('BANKNIFTY') || item.name.includes('NIFTY BANK')) &&
+          item.instrumenttype === 'OPTIDX';
       });
 
       logger.info(`📊 Master Data Summary:`);
@@ -738,7 +738,7 @@ class AngelAPI {
       if (bankniftyExpiries.length > 0 && bankniftyOptions.length > 0) {
         const testExpiry = bankniftyExpiries[0];
         logger.info(`🧪 Testing token fetch for BANKNIFTY ${testExpiry} options...`);
-        
+
         // Extract strike from a real option
         const testOption = bankniftyOptions.find((opt: any) => opt.name.includes(testExpiry));
         if (testOption) {
@@ -746,7 +746,7 @@ class AngelAPI {
           if (strikeMatch) {
             const testStrike = parseInt(strikeMatch[1]);
             const testType = strikeMatch[2] as 'CE' | 'PE';
-            
+
             logger.info(`🧪 Testing: BANKNIFTY ${testStrike} ${testType} ${testExpiry}`);
             const token = await this.getOptionToken('BANKNIFTY', testStrike, testType, testExpiry as string);
             logger.info(`🧪 Result: ${token ? `✅ Token: ${token}` : '❌ Failed'}`);
@@ -770,9 +770,9 @@ class AngelAPI {
       // Filter for current options
       const options = masterData.filter((item: any) => {
         return item.exch_seg === 'NFO' &&
-               item.name &&
-               item.name.includes(indexName) &&
-               item.instrumenttype === 'OPTIDX';
+          item.name &&
+          item.name.includes(indexName) &&
+          item.instrumenttype === 'OPTIDX';
       });
 
       // Extract unique expiries and sort them
