@@ -23,8 +23,10 @@ interface PriceBuffers {
 }
 
 class TradingStrategy {
-  private lastSignalTime: { [key: string]: number } = {}; // Changed to track per signal type
+  private lastSignalTime: { [key: string]: number } = {}; // Track per signal type
+  private activePositions: { [key: string]: boolean } = {}; // Track active positions per index
   private cleanupInterval: NodeJS.Timeout | null = null;
+  private positionLoggingInterval: NodeJS.Timeout | null = null;
   public priceBuffers: PriceBuffers = {
     NIFTY: [],
     BANKNIFTY: []
@@ -34,8 +36,59 @@ class TradingStrategy {
   public async initialize(): Promise<void> {
     logger.info('🎯 Trading strategy initializing...');
 
+    // Listen for order placement and exits to track active positions
+    (process as any).on('orderPlaced', (data: any) => {
+      const indexName = data.signal.indexName;
+      this.activePositions[indexName] = true;
+      logger.info(`🔒 POSITION LOCKED: ${indexName} - blocking new signals`);
+      this.logActivePositionsStatus('ORDER_PLACED');
+    });
+
+    (process as any).on('orderExited', (data: any) => {
+      const indexName = data.order.signal.indexName;
+      this.activePositions[indexName] = false;
+      logger.info(`🔓 POSITION UNLOCKED: ${indexName} - allowing new signals`);
+      this.logActivePositionsStatus('ORDER_EXITED');
+    });
+
+    // Listen for order cancellations to unlock positions
+    (process as any).on('orderCancelled', (data: any) => {
+      const indexName = data.order.signal.indexName;
+      this.activePositions[indexName] = false;
+      logger.info(`🔓 POSITION UNLOCKED after cancellation: ${indexName} - allowing new signals`);
+      this.logActivePositionsStatus('ORDER_CANCELLED');
+    });
+
+    // Listen for order rejections/failures to unlock positions
+    (process as any).on('orderRejected', (data: any) => {
+      const indexName = data.signal.indexName;
+      this.activePositions[indexName] = false;
+      logger.info(`🔓 POSITION UNLOCKED after rejection: ${indexName} - allowing new signals`);
+      logger.error(`💥 Order rejected: ${data.reason}`);
+      this.logActivePositionsStatus('ORDER_REJECTED');
+    });
+
+    (process as any).on('orderFailed', (data: any) => {
+      const indexName = data.signal.indexName;
+      this.activePositions[indexName] = false;
+      logger.info(`🔓 POSITION UNLOCKED after failure: ${indexName} - allowing new signals`);
+      logger.error(`💥 Order failed: ${data.reason}`);
+      this.logActivePositionsStatus('ORDER_FAILED');
+    });
+
+    (process as any).on('signalExecutionFailed', (data: any) => {
+      const indexName = data.signal.indexName;
+      this.activePositions[indexName] = false;
+      logger.info(`🔓 POSITION UNLOCKED after signal execution failure: ${indexName} - allowing new signals`);
+      logger.error(`💥 Signal execution failed: ${data.reason}`);
+      this.logActivePositionsStatus('SIGNAL_EXECUTION_FAILED');
+    });
+
     // Start cleanup mechanism for old signal times (every hour)
     this.startCleanupProcess();
+
+    // Start periodic position status logging (every 30 seconds)
+    this.startPositionStatusLogging();
 
     // Subscribe to real-time price updates
     webSocketFeed.addSubscriber((indexName: string, priceUpdate: PriceUpdate) => {
@@ -119,20 +172,31 @@ class TradingStrategy {
     const signal = await this.analyzeSignal(indexName, priceUpdate.price, buffer);
 
     if (signal && signal.confidence >= config.strategy.confidenceThreshold) {
-      // ✅ CHANGE: Use index name for cooldown (not signal type) to prevent multiple positions
-      const signalKey = indexName; // Simplified: per index, not per option type
+      // ✅ CRITICAL FIX: Multi-layer duplicate prevention
+      const signalKey = indexName; // Use index name for tracking
 
-      // Check cooldown for this index (both CE and PE blocked during cooldown)
-      if (this.isSignalInCooldown(signalKey)) {
-        const cooldownRemaining = Math.ceil((config.trading.signalCooldown - (Date.now() - (this.lastSignalTime[signalKey] || 0))) / 1000);
-        logger.info(`⏳ ${indexName} - Index cooldown active, ${cooldownRemaining}s remaining (blocks both CE/PE)`);
+      // Check 1: Active position blocking (most important)
+      if (this.activePositions[indexName]) {
+        logger.info(`🔒 ${indexName} - Position already active, blocking ${signal.optionType} signal`);
+        this.logActivePositionsStatus('SIGNAL_BLOCKED');
         return;
       }
 
+      // Check 2: Recent signal cooldown (prevents rapid-fire signals)
+      if (this.isSignalInCooldown(signalKey)) {
+        const cooldownRemaining = Math.ceil((config.trading.signalCooldown - (Date.now() - (this.lastSignalTime[signalKey] || 0))) / 1000);
+        logger.info(`⏳ ${indexName} - Signal cooldown active, ${cooldownRemaining}s remaining`);
+        return;
+      }
+
+      // ✅ CRITICAL: Set cooldown BEFORE executing signal to prevent race conditions
+      this.lastSignalTime[signalKey] = Date.now();
+
       this.executeSignal(signal).catch(error => {
         logger.error('Failed to execute signal:', error.message);
+        // Reset cooldown on failure to allow retry
+        delete this.lastSignalTime[signalKey];
       });
-      this.lastSignalTime[signalKey] = Date.now();
     } else if (signal && signal.confidence < config.strategy.confidenceThreshold) {
       logger.info(`⚠️ ${indexName} - Signal generated but confidence too low: ${signal.confidence.toFixed(1)}% < ${config.strategy.confidenceThreshold}%`);
     }
@@ -605,6 +669,9 @@ class TradingStrategy {
 
     } catch (error) {
       logger.error('Error in executeSignal:', (error as Error).message);
+      
+      // ✅ CRITICAL FIX: Emit signal execution failure to unlock position
+      (process as any).emit('signalExecutionFailed', { signal, reason: (error as Error).message });
     }
   }
 
@@ -1168,7 +1235,13 @@ class TradingStrategy {
 
       // Add WebSocket connection status
       const wsStatus = webSocketFeed.getConnectionStatus();
-      summary += `🔗 WebSocket: ${wsStatus.connected ? '✅ Connected' : '❌ Disconnected'} | Healthy: ${wsStatus.healthy}\n\n`;
+      summary += `🔗 WebSocket: ${wsStatus.connected ? '✅ Connected' : '❌ Disconnected'} | Healthy: ${wsStatus.healthy}\n`;
+      
+      // Add position and cooldown status
+      const positions = this.getPositionStatus();
+      const cooldowns = this.getSignalCooldowns();
+      summary += `🔒 Active Positions: ${Object.keys(positions).filter(k => positions[k]).join(', ') || 'None'}\n`;
+      summary += `⏳ Signal Cooldowns: ${Object.keys(cooldowns).map(k => `${k}(${cooldowns[k]}s)`).join(', ') || 'None'}\n\n`;
 
       for (const indexName of ['NIFTY', 'BANKNIFTY'] as IndexName[]) {
         const buffer = this.priceBuffers[indexName];
@@ -1246,6 +1319,15 @@ class TradingStrategy {
     logger.info('🧹 Strategy cleanup process started (hourly signal time cleanup)');
   }
 
+  private startPositionStatusLogging(): void {
+    // Log position status every 30 seconds for monitoring
+    this.positionLoggingInterval = setInterval(() => {
+      this.logActivePositionsStatus('PERIODIC_STATUS');
+    }, 30 * 1000); // Every 30 seconds
+
+    logger.info('📊 Position status logging started (every 30 seconds)');
+  }
+
   private cleanupOldSignalTimes(): void {
     const now = Date.now();
     const dayAgo = now - (24 * 60 * 60 * 1000); // 24 hours ago
@@ -1263,11 +1345,87 @@ class TradingStrategy {
     }
   }
 
+  public getPositionStatus(): { [key: string]: boolean } {
+    return { ...this.activePositions };
+  }
+
+  private logActivePositionsStatus(event: string): void {
+    const timestamp = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' });
+    const lockedPositions = Object.keys(this.activePositions).filter(k => this.activePositions[k]);
+    const unlockedPositions = Object.keys(this.activePositions).filter(k => !this.activePositions[k]);
+    
+    logger.info(`📊 ACTIVE POSITIONS STATUS [${event}] @ ${timestamp}:`);
+    logger.info(`   🔒 LOCKED: ${lockedPositions.length > 0 ? lockedPositions.join(', ') : 'None'}`);
+    logger.info(`   🔓 UNLOCKED: ${unlockedPositions.length > 0 ? unlockedPositions.join(', ') : 'None'}`);
+    
+    // Enhanced logging for debugging
+    const allIndices = ['NIFTY', 'BANKNIFTY'];
+    logger.info(`   📋 DETAILED STATUS:`);
+    allIndices.forEach(index => {
+      const status = this.activePositions[index] ? '🔒 LOCKED' : '🔓 UNLOCKED';
+      logger.info(`      ${index}: ${status}`);
+    });
+  }
+
+  public getSignalCooldowns(): { [key: string]: number } {
+    const now = Date.now();
+    const cooldowns: { [key: string]: number } = {};
+    
+    Object.keys(this.lastSignalTime).forEach(key => {
+      const remaining = Math.max(0, config.trading.signalCooldown - (now - this.lastSignalTime[key]));
+      if (remaining > 0) {
+        cooldowns[key] = Math.ceil(remaining / 1000); // Convert to seconds
+      }
+    });
+    
+    return cooldowns;
+  }
+
+  public resetPositions(): void {
+    const lockedPositions = Object.keys(this.activePositions).filter(k => this.activePositions[k]);
+    
+    if (lockedPositions.length > 0) {
+      logger.warn(`🔧 Manually resetting ${lockedPositions.length} locked positions: ${lockedPositions.join(', ')}`);
+      
+      lockedPositions.forEach(indexName => {
+        this.activePositions[indexName] = false;
+        logger.info(`🔓 Force unlocked: ${indexName}`);
+      });
+      
+      this.logActivePositionsStatus('MANUAL_RESET');
+    } else {
+      logger.info(`✅ No locked positions to reset`);
+      this.logActivePositionsStatus('MANUAL_RESET_NO_CHANGE');
+    }
+  }
+
+  public resetCooldowns(): void {
+    const activeCooldowns = Object.keys(this.getSignalCooldowns());
+    
+    if (activeCooldowns.length > 0) {
+      logger.warn(`🔧 Manually resetting ${activeCooldowns.length} active cooldowns: ${activeCooldowns.join(', ')}`);
+      this.lastSignalTime = {};
+      logger.info(`✅ All cooldowns cleared`);
+    } else {
+      logger.info(`✅ No active cooldowns to reset`);
+    }
+  }
+
+  public logPositionStatusNow(): void {
+    this.logActivePositionsStatus('MANUAL_CHECK');
+  }
+
   public stop(): void {
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval);
       this.cleanupInterval = null;
       logger.info('🧹 Strategy cleanup process stopped');
+    }
+    
+    if (this.positionLoggingInterval) {
+      clearInterval(this.positionLoggingInterval);
+      this.positionLoggingInterval = null;
+      logger.info('📊 Position status logging stopped');
     }
   }
 }

@@ -152,12 +152,19 @@ class OrderService {
           logger.error(`   📋 Response Status: ${orderResponse.status}`);
           logger.error(`   💬 Error Message: ${orderResponse.message}`);
           logger.error(`   📈 Signal: ${signal.optionSymbol}`);
+          
+          // Emit order rejection event to unlock position in strategy
+          (process as any).emit('orderRejected', { signal, reason: orderResponse.message });
+          
           throw new Error(`Real order failed: ${orderResponse.message}`);
         }
       }
 
     } catch (error) {
       logger.error('Order processing failed:', (error as Error).message);
+      
+      // Emit order failure event to unlock position in strategy
+      (process as any).emit('orderFailed', { signal, reason: (error as Error).message });
     }
   }
 
@@ -605,6 +612,10 @@ ${pnlColor} P&L: ₹${order.pnl?.toFixed(2)} | Daily: ₹${this.dailyPnL.toFixed
       if (order.isPaperTrade) {
         order.status = 'CANCELLED';
         logger.info(`📄 Paper order ${orderId} cancelled successfully`);
+        
+        // Emit cancellation event to unlock position in strategy
+        (process as any).emit('orderCancelled', { order });
+        
         return true;
       }
 
@@ -618,6 +629,10 @@ ${pnlColor} P&L: ₹${order.pnl?.toFixed(2)} | Daily: ₹${this.dailyPnL.toFixed
       if (response.status) {
         order.status = 'CANCELLED';
         logger.info(`💰 Real order ${orderId} cancelled successfully`);
+        
+        // Emit cancellation event to unlock position in strategy
+        (process as any).emit('orderCancelled', { order });
+        
         return true;
       } else {
         logger.error(`Order cancellation failed: ${response.message}`);
