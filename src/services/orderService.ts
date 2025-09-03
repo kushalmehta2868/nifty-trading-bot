@@ -816,7 +816,16 @@ ${pnlColor} P&L: ₹${order.pnl?.toFixed(2)} | Daily: ₹${this.dailyPnL.toFixed
       const currentPrice = await angelAPI.getOptionPrice(activeOrder.signal.optionSymbol, symbolToken);
       
       if (!currentPrice || currentPrice <= 0) {
-        logger.debug(`Could not get valid current price for ${activeOrder.signal.optionSymbol} (price: ${currentPrice}) - skipping exit check`);
+        // Enhanced logging for debugging paper trade exits
+        const shouldLog = Date.now() % 60000 < 3000; // Log every 60 seconds
+        if (shouldLog) {
+          logger.warn(`📄 PAPER TRADE EXIT DEBUG: ${activeOrder.signal.optionSymbol}`);
+          logger.warn(`   Symbol Token: ${symbolToken}`);
+          logger.warn(`   Current Price: ${currentPrice} (invalid)`);
+          logger.warn(`   Entry Price: ₹${activeOrder.entryPrice || activeOrder.signal.entryPrice}`);
+          logger.warn(`   Target: ₹${activeOrder.signal.target} | SL: ₹${activeOrder.signal.stopLoss}`);
+          logger.warn(`   ⚠️ Cannot exit - invalid price data`);
+        }
         return;
       }
       
@@ -881,12 +890,32 @@ ${pnlColor} P&L: ₹${order.pnl?.toFixed(2)} | Daily: ₹${this.dailyPnL.toFixed
         // ✅ CRITICAL FIX: Remove completed order from activeOrders array
         this.removeOrderFromActiveList(activeOrder.orderId, 'PAPER_EXIT_COMPLETED');
       } else {
-        // Log paper trade monitoring (less frequent to avoid spam)
+        // Enhanced monitoring with exit readiness indicators
         const shouldLog = Date.now() % 30000 < 3000; // Log every 30 seconds
         if (shouldLog) {
           const targetDistance = ((currentPrice - target) / target * 100).toFixed(2);
           const slDistance = ((currentPrice - stopLoss) / stopLoss * 100).toFixed(2);
-          logger.info(`📄 ${activeOrder.signal.optionSymbol}: Current ₹${currentPrice.toFixed(2)} | Target: ₹${target} (${targetDistance}%) | SL: ₹${stopLoss} (${slDistance}%)`);
+          const targetProgress = ((currentPrice - entryPrice) / (target - entryPrice) * 100).toFixed(1);
+          const slProgress = ((entryPrice - currentPrice) / (entryPrice - stopLoss) * 100).toFixed(1);
+          
+          // Enhanced exit readiness indicators
+          let status = '🔄 Monitoring';
+          if (currentPrice >= target * 0.95) status = '🎯 Near Target (95%+)';
+          else if (currentPrice >= target * 0.85) status = '🟡 Approaching Target (85%+)';
+          else if (currentPrice <= stopLoss * 1.05) status = '🚨 Near Stop Loss (105%-)';
+          else if (currentPrice <= stopLoss * 1.15) status = '🟠 Approaching SL (115%-)';
+          
+          logger.info(`📄 ${activeOrder.signal.optionSymbol}: ${status}`);
+          logger.info(`   Current: ₹${currentPrice.toFixed(2)} | Target: ₹${target.toFixed(2)} (${targetDistance}%) | SL: ₹${stopLoss.toFixed(2)} (${slDistance}%)`);
+          logger.info(`   Progress: Target ${targetProgress}% | SL Risk ${slProgress}%`);
+          
+          // Debug exit conditions
+          if (currentPrice >= target) {
+            logger.error(`🚨 BUG DETECTED: Current price (₹${currentPrice}) >= Target (₹${target}) but exit not triggered!`);
+          }
+          if (currentPrice <= stopLoss) {
+            logger.error(`🚨 BUG DETECTED: Current price (₹${currentPrice}) <= Stop Loss (₹${stopLoss}) but exit not triggered!`);
+          }
         }
       }
 

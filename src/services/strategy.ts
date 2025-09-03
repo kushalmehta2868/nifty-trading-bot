@@ -31,16 +31,28 @@ class TradingStrategy {
     BANKNIFTY: []
   };
 
+  // Index-specific momentum thresholds based on volatility characteristics
+  private getMomentumThreshold(indexName: IndexName): number {
+    switch (indexName) {
+      case 'NIFTY':
+        return 0.02; // 0.02% for less volatile NIFTY
+      case 'BANKNIFTY':
+        return 0.04; // 0.04% for more volatile BANKNIFTY
+      default:
+        return 0.02; // Default fallback
+    }
+  }
+
 
   public async initialize(): Promise<void> {
     logger.info('🎯 Trading strategy initializing...');
 
-    // Listen for order placement and exits to track active positions
+    // Listen for order placement confirmations (position already locked during signal processing)
     const orderPlacedHandler = (data: any) => {
       const indexName = data.signal.indexName;
-      this.activePositions[indexName] = true;
-      logger.info(`🔒 POSITION LOCKED: ${indexName} - blocking new signals`);
-      this.logActivePositionsStatus('ORDER_PLACED');
+      // Position already locked during signal processing - just log confirmation
+      logger.info(`✅ ORDER PLACED CONFIRMED: ${indexName} - position remains locked`);
+      this.logActivePositionsStatus('ORDER_PLACED_CONFIRMED');
     };
     (process as any).on('orderPlaced', orderPlacedHandler);
     this.eventHandlers.set('orderPlaced', orderPlacedHandler);
@@ -200,13 +212,21 @@ class TradingStrategy {
         return;
       }
 
+      // ✅ RACE CONDITION FIX: Lock position IMMEDIATELY to prevent duplicate signals
+      this.activePositions[indexName] = true;
+      logger.info(`🔒 IMMEDIATE LOCK: ${indexName} - blocking subsequent signals during processing`);
+      this.logActivePositionsStatus('SIGNAL_PROCESSING');
+
       // ✅ CRITICAL: Set cooldown BEFORE executing signal to prevent race conditions
       this.lastSignalTime[signalKey] = Date.now();
 
       this.executeSignal(signal).catch(error => {
         logger.error('Failed to execute signal:', error.message);
-        // Reset cooldown on failure to allow retry
+        // Reset cooldown and unlock position on failure to allow retry
         delete this.lastSignalTime[signalKey];
+        this.activePositions[indexName] = false;
+        logger.info(`🔓 UNLOCKED after signal execution failure: ${indexName}`);
+        this.logActivePositionsStatus('SIGNAL_EXECUTION_FAILED');
       });
     } else if (signal && signal.confidence < config.strategy.confidenceThreshold) {
       logger.info(`⚠️ ${indexName} - Signal generated but confidence too low: ${signal.confidence.toFixed(1)}% < ${config.strategy.confidenceThreshold}%`);
@@ -286,7 +306,7 @@ class TradingStrategy {
     const mtfCEConditions = {
       majority_rsi_bullish: (+((rsi1 > 55)) + (+(rsi5 > 55)) + (+(rsi10 > 55))) >= 2, // Stronger RSI requirement
       trend_alignment: currentPrice > sma1 && sma1 >= sma5 && sma5 >= sma10, // Strict trend alignment
-      momentum_strong: momentum1 > 0.01 && momentum5 > 0.01, // 0.01% momentum requirement
+      momentum_strong: momentum1 > this.getMomentumThreshold(indexName) && momentum5 > this.getMomentumThreshold(indexName), // Index-specific momentum requirement
       strong_confluence: confluenceScore >= 70, // Higher confluence requirement
       time_filter: this.isWithinTradingHours(indexName)
     };
@@ -295,7 +315,7 @@ class TradingStrategy {
     const mtfPEConditions = {
       majority_rsi_bearish: (+((rsi1 < 45)) + (+(rsi5 < 45)) + (+(rsi10 < 45))) >= 2, // Stronger RSI requirement
       trend_alignment: currentPrice < sma1 && sma1 <= sma5 && sma5 <= sma10, // Strict trend alignment
-      momentum_strong: momentum1 < -0.01 && momentum5 < -0.01, // -0.01% momentum requirement
+      momentum_strong: momentum1 < -this.getMomentumThreshold(indexName) && momentum5 < -this.getMomentumThreshold(indexName), // Index-specific momentum requirement
       strong_confluence: confluenceScore >= 70, // Higher confluence requirement
       time_filter: this.isWithinTradingHours(indexName)
     };
@@ -403,7 +423,7 @@ class TradingStrategy {
       price_near_lower_and_oversold: currentPrice <= bollinger.lower * 1.005 && rsi < 35, // Both conditions required
       rsi_recovery_zone: rsi > 30 && rsi < 50, // Narrower RSI range
       trend_support: currentPrice > bollinger.middle, // Must be above middle band
-      momentum_strong: momentum > 0.01, // 0.01% momentum requirement
+      momentum_strong: momentum > this.getMomentumThreshold(indexName), // Index-specific momentum requirement
       squeeze_or_expansion: bollinger.squeeze || volatility.isExpanding, // Volatility condition
       time_filter: this.isWithinTradingHours(indexName)
     };
@@ -412,7 +432,7 @@ class TradingStrategy {
       price_near_upper_and_overbought: currentPrice >= bollinger.upper * 0.995 && rsi > 65, // Both conditions required  
       rsi_decline_zone: rsi < 70 && rsi > 50, // Narrower RSI range
       trend_resistance: currentPrice < bollinger.middle, // Must be below middle band
-      momentum_strong: momentum < -0.01, // -0.01% momentum requirement
+      momentum_strong: momentum < -this.getMomentumThreshold(indexName), // Index-specific momentum requirement
       squeeze_or_expansion: bollinger.squeeze || volatility.isExpanding, // Volatility condition
       time_filter: this.isWithinTradingHours(indexName)
     };
@@ -532,7 +552,7 @@ class TradingStrategy {
 
     // ✅ TIGHTENED Strategy 2: Price Action + Momentum (Higher quality setups)
     const priceActionCEConditions = {
-      price_momentum_strong: momentum > 0.01 && rsi > 50, // 0.01% momentum requirement
+      price_momentum_strong: momentum > this.getMomentumThreshold(indexName) && rsi > 50, // Index-specific momentum requirement
       trend_bullish: currentPrice > sma && rsi > 55, // Both conditions required (not OR)
       near_support: supportResistance.nearSupport, // Must be near support level
       not_overbought: rsi < 70, // Stricter overbought level
@@ -540,7 +560,7 @@ class TradingStrategy {
     };
 
     const priceActionPEConditions = {
-      price_momentum_strong: momentum < -0.01 && rsi < 50, // -0.01% momentum requirement
+      price_momentum_strong: momentum < -this.getMomentumThreshold(indexName) && rsi < 50, // Index-specific momentum requirement
       trend_bearish: currentPrice < sma && rsi < 45, // Both conditions required (not OR)
       near_resistance: supportResistance.nearResistance, // Must be near resistance level
       not_oversold: rsi > 30, // Stricter oversold level
@@ -1304,7 +1324,7 @@ class TradingStrategy {
 
         const s2Ready = Object.values({
           nearLevels: supportResistance.nearSupport || supportResistance.nearResistance,
-          strongMomentum: Math.abs(momentum) > 0.01,
+          strongMomentum: Math.abs(momentum) > this.getMomentumThreshold(indexName),
           rsiZone: rsi > 30 && rsi < 70
         }).filter(c => c === true).length;
 

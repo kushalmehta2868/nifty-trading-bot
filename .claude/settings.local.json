@@ -17,7 +17,8 @@
       "WebFetch(domain:smartapi.angelone.in)",
       "WebFetch(domain:smartapi.angelbroking.com)",
       "Bash(del test-option-tokens.ts)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(del test-momentum-thresholds.js)"
     ],
     "deny": [],
     "ask": []
