@@ -480,9 +480,9 @@ class OrderService {
         const exitPrice = parseFloat(exitTrade.fillprice || exitTrade.price);
         const entryPrice = activeOrder.entryPrice || activeOrder.signal.entryPrice;
 
-        // ✅ FIXED: Check for already completed status instead of just exitPrice
-        if (activeOrder.status === 'EXITED_TARGET' || activeOrder.status === 'EXITED_SL') {
-          logger.debug(`Exit already processed for ${activeOrder.signal.optionSymbol} - Status: ${activeOrder.status}`);
+        // ✅ FIXED: Check for already processed exit by checking exitPrice
+        if (activeOrder.exitPrice) {
+          logger.debug(`Exit already processed for ${activeOrder.signal.optionSymbol} - ExitPrice: ${activeOrder.exitPrice}`);
           return;
         }
 
@@ -864,9 +864,9 @@ ${pnlColor} P&L: ₹${order.pnl?.toFixed(2)} | Daily: ₹${this.dailyPnL.toFixed
       }
 
       if (shouldExit) {
-        // ✅ FIXED: Check for already completed status instead of just exitPrice
-        if (activeOrder.status === 'EXITED_TARGET' || activeOrder.status === 'EXITED_SL') {
-          logger.debug(`Exit already processed for ${activeOrder.signal.optionSymbol} - Status: ${activeOrder.status}`);
+        // ✅ FIXED: Check for already processed exit by checking exitPrice  
+        if (activeOrder.exitPrice) {
+          logger.debug(`Exit already processed for ${activeOrder.signal.optionSymbol} - ExitPrice: ${activeOrder.exitPrice}`);
           return;
         }
 
