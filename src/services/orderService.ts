@@ -315,7 +315,7 @@ class OrderService {
   }
 
   private calculateStrike(spotPrice: number, indexName: string): number {
-    const roundTo = indexName === 'BANKNIFTY' ? 100 : 50;
+    const roundTo = indexName === 'BANKNIFTY' ? 500 : 50;
     return Math.round(spotPrice / roundTo) * roundTo;
   }
 
@@ -480,9 +480,9 @@ class OrderService {
         const exitPrice = parseFloat(exitTrade.fillprice || exitTrade.price);
         const entryPrice = activeOrder.entryPrice || activeOrder.signal.entryPrice;
 
-        // Prevent duplicate processing
-        if (activeOrder.exitPrice) {
-          logger.debug(`Exit already processed for ${activeOrder.signal.optionSymbol}`);
+        // ✅ FIXED: Check for already completed status instead of just exitPrice
+        if (activeOrder.status === 'EXITED_TARGET' || activeOrder.status === 'EXITED_SL') {
+          logger.debug(`Exit already processed for ${activeOrder.signal.optionSymbol} - Status: ${activeOrder.status}`);
           return;
         }
 
@@ -590,7 +590,7 @@ ${pnlColor} P&L: ₹${order.pnl?.toFixed(2)} | Daily: ₹${this.dailyPnL.toFixed
       logger.error(`Failed to extract strike from ${optionSymbol}, using fallback calculation`);
       // Fallback to ATM calculation
       const baseStrike = indexName === 'BANKNIFTY' ? 
-        Math.round(25000 / 100) * 100 : 
+        Math.round(25000 / 500) * 500 : 
         Math.round(25000 / 50) * 50;
       return baseStrike;
     }
@@ -864,16 +864,25 @@ ${pnlColor} P&L: ₹${order.pnl?.toFixed(2)} | Daily: ₹${this.dailyPnL.toFixed
       }
 
       if (shouldExit) {
-        // Prevent duplicate processing
-        if (activeOrder.exitPrice) {
-          logger.debug(`Exit already processed for ${activeOrder.signal.optionSymbol}`);
+        // ✅ FIXED: Check for already completed status instead of just exitPrice
+        if (activeOrder.status === 'EXITED_TARGET' || activeOrder.status === 'EXITED_SL') {
+          logger.debug(`Exit already processed for ${activeOrder.signal.optionSymbol} - Status: ${activeOrder.status}`);
+          return;
+        }
+
+        // ✅ ADDITIONAL SAFETY: Double-check the exit conditions one more time
+        const reconfirmExit = (currentPrice >= target && exitReason === 'TARGET') || 
+                              (currentPrice <= stopLoss && exitReason === 'STOPLOSS');
+        
+        if (!reconfirmExit) {
+          logger.warn(`⚠️ Exit condition recheck failed for ${activeOrder.signal.optionSymbol}: Current=₹${currentPrice}, Target=₹${target}, SL=₹${stopLoss}, Reason=${exitReason}`);
           return;
         }
 
         // Calculate P&L
         const pnl = (exitPrice - entryPrice) * config.indices[activeOrder.signal.indexName].lotSize;
 
-        // Update order status
+        // ✅ ATOMIC UPDATE: Update all properties together
         activeOrder.status = exitReason === 'TARGET' ? 'EXITED_TARGET' : 'EXITED_SL';
         activeOrder.exitPrice = exitPrice;
         activeOrder.exitReason = exitReason;
@@ -883,6 +892,7 @@ ${pnlColor} P&L: ₹${order.pnl?.toFixed(2)} | Daily: ₹${this.dailyPnL.toFixed
         this.dailyPnL += pnl;
 
         logger.info(`📄 Paper exit by real market price: ${activeOrder.signal.optionSymbol} @ ₹${exitPrice.toFixed(2)} (market: ₹${currentPrice.toFixed(2)}) - ${exitReason} - P&L: ₹${pnl.toFixed(2)}`);
+        logger.info(`✅ Exit conditions confirmed: Target hit=${currentPrice >= target}, SL hit=${currentPrice <= stopLoss}`);
 
         // Send exit notification
         this.sendExitNotification(activeOrder);
@@ -909,12 +919,19 @@ ${pnlColor} P&L: ₹${order.pnl?.toFixed(2)} | Daily: ₹${this.dailyPnL.toFixed
           logger.info(`   Current: ₹${currentPrice.toFixed(2)} | Target: ₹${target.toFixed(2)} (${targetDistance}%) | SL: ₹${stopLoss.toFixed(2)} (${slDistance}%)`);
           logger.info(`   Progress: Target ${targetProgress}% | SL Risk ${slProgress}%`);
           
-          // Debug exit conditions
-          if (currentPrice >= target) {
-            logger.error(`🚨 BUG DETECTED: Current price (₹${currentPrice}) >= Target (₹${target}) but exit not triggered!`);
-          }
-          if (currentPrice <= stopLoss) {
-            logger.error(`🚨 BUG DETECTED: Current price (₹${currentPrice}) <= Stop Loss (₹${stopLoss}) but exit not triggered!`);
+          // ✅ IMPROVED: More detailed exit condition debugging
+          const targetHit = currentPrice >= target;
+          const slHit = currentPrice <= stopLoss;
+          
+          if (targetHit || slHit) {
+            logger.error(`🚨 EXIT CONDITIONS MET BUT NOT PROCESSED:`);
+            logger.error(`   Symbol: ${activeOrder.signal.optionSymbol}`);
+            logger.error(`   Current Price: ₹${currentPrice.toFixed(2)}`);
+            logger.error(`   Target: ₹${target.toFixed(2)} (Hit: ${targetHit})`);
+            logger.error(`   Stop Loss: ₹${stopLoss.toFixed(2)} (Hit: ${slHit})`);
+            logger.error(`   Order Status: ${activeOrder.status}`);
+            logger.error(`   Exit Price Set: ${activeOrder.exitPrice ? '✅ Yes' : '❌ No'}`);
+            logger.error(`   🔧 This indicates a synchronization bug that needs investigation`);
           }
         }
       }

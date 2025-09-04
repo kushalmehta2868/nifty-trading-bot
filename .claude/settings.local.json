@@ -18,7 +18,12 @@
       "WebFetch(domain:smartapi.angelbroking.com)",
       "Bash(del test-option-tokens.ts)",
       "Bash(dir:*)",
-      "Bash(del test-momentum-thresholds.js)"
+      "Bash(del test-momentum-thresholds.js)",
+      "Read(/C:\\Users\\Asus\\Desktop\\trading-bot\\src\\services/**)",
+      "Read(/C:\\Users\\Asus\\Desktop\\trading-bot\\src\\services/**)",
+      "Read(/C:\\Users\\Asus\\Desktop\\trading-bot\\src\\services/**)",
+      "Read(/C:\\Users\\Asus\\Desktop\\trading-bot\\src\\services/**)",
+      "Read(/C:\\Users\\Asus\\Desktop\\trading-bot\\src\\services/**)"
     ],
     "deny": [],
     "ask": []

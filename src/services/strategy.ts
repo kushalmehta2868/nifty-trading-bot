@@ -830,7 +830,7 @@ class TradingStrategy {
   private calculateStrike(spotPrice: number, indexName: IndexName): number {
     switch (indexName) {
       case 'BANKNIFTY':
-        return Math.round(spotPrice / 100) * 100;
+        return Math.round(spotPrice / 500) * 500;
       case 'NIFTY':
         return Math.round(spotPrice / 50) * 50;
       default:
@@ -854,8 +854,8 @@ class TradingStrategy {
 
     switch (indexName) {
       case 'BANKNIFTY':
-        baseStrike = Math.round(spotPrice / 100) * 100;
-        strikeInterval = 100;
+        baseStrike = Math.round(spotPrice / 500) * 500;
+        strikeInterval = 500;
         break;
       case 'NIFTY':
         baseStrike = Math.round(spotPrice / 50) * 50;
@@ -986,7 +986,7 @@ class TradingStrategy {
       logger.error(`Failed to extract strike from ${optionSymbol}, using fallback calculation`);
       // Fallback to ATM calculation
       const baseStrike = indexName === 'BANKNIFTY' ?
-        Math.round(25000 / 100) * 100 :
+        Math.round(25000 / 500) * 500 :
         Math.round(25000 / 50) * 50;
       return baseStrike;
     }
