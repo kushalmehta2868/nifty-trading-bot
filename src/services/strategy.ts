@@ -35,11 +35,11 @@ class TradingStrategy {
   private getMomentumThreshold(indexName: IndexName): number {
     switch (indexName) {
       case 'NIFTY':
-        return 0.02; // 0.02% for less volatile NIFTY
+        return 0.015; // 0.015% - Relaxed for better signal frequency
       case 'BANKNIFTY':
-        return 0.04; // 0.04% for more volatile BANKNIFTY
+        return 0.025; // 0.025% - Relaxed for better signal frequency
       default:
-        return 0.02; // Default fallback
+        return 0.015; // Default fallback
     }
   }
 
@@ -171,6 +171,10 @@ class TradingStrategy {
 
     // Update price buffer - volume data removed as it's unreliable for indices
     const buffer = this.priceBuffers[indexName];
+    if (!buffer) {
+      logger.error(`Price buffer not initialized for ${indexName}`);
+      return;
+    }
 
     buffer.push({
       price: priceUpdate.price,
@@ -251,15 +255,15 @@ class TradingStrategy {
     }
 
     // Try Strategy 3 first (Multi-Timeframe Confluence) - Highest accuracy
-    const confluenceSignal = await this.analyzeMultiTimeframeConfluence(indexName, currentPrice, prices);
+    const confluenceSignal = await this.analyzeMultiTimeframeConfluence(indexName, currentPrice, prices, priceBuffer);
     if (confluenceSignal) return confluenceSignal;
 
     // Try Strategy 1 (Bollinger + RSI) - High accuracy
-    const bollingerSignal = await this.analyzeBollingerRSIStrategy(indexName, currentPrice, prices);
+    const bollingerSignal = await this.analyzeBollingerRSIStrategy(indexName, currentPrice, prices, priceBuffer);
     if (bollingerSignal) return bollingerSignal;
 
     // Try Strategy 2 (Price Action + Momentum) - Fast response
-    const priceActionSignal = await this.analyzePriceActionStrategy(indexName, currentPrice, prices);
+    const priceActionSignal = await this.analyzePriceActionStrategy(indexName, currentPrice, prices, priceBuffer);
     if (priceActionSignal) return priceActionSignal;
 
     return null; // No signals from any strategy
@@ -269,7 +273,8 @@ class TradingStrategy {
   private async analyzeMultiTimeframeConfluence(
     indexName: IndexName,
     currentPrice: number,
-    prices: number[]
+    prices: number[],
+    priceBuffer: PriceBufferItem[]
   ): Promise<TradingSignal | null> {
     if (prices.length < 50) return null; // Need more data for multi-timeframe
 
@@ -302,44 +307,53 @@ class TradingStrategy {
     // Advanced volatility calculation for adaptive targets
     const volatility = this.calculateAdaptiveVolatility(tf1);
 
-    // ✅ TIGHTENED Multi-timeframe CE conditions (higher quality signals)
+    // ✅ NEW: VWAP analysis
+    const vwapData = this.calculateVWAP(priceBuffer, 20);
+
+    // ✅ OPTIMIZED Multi-timeframe CE conditions (balanced quality vs frequency + VWAP)
     const mtfCEConditions = {
-      majority_rsi_bullish: (+((rsi1 > 55)) + (+(rsi5 > 55)) + (+(rsi10 > 55))) >= 2, // Stronger RSI requirement
-      trend_alignment: currentPrice > sma1 && sma1 >= sma5 && sma5 >= sma10, // Strict trend alignment
-      momentum_strong: momentum1 > this.getMomentumThreshold(indexName) && momentum5 > this.getMomentumThreshold(indexName), // Index-specific momentum requirement
-      strong_confluence: confluenceScore >= 70, // Higher confluence requirement
+      rsi_bullish: (+((rsi1 > 52)) + (+(rsi5 > 52)) + (+(rsi10 > 52))) >= 2, // Relaxed RSI requirement
+      trend_alignment: currentPrice > sma1 && sma1 >= sma5, // Less strict - only 2 timeframes
+      momentum_strong: momentum1 > this.getMomentumThreshold(indexName) || momentum5 > this.getMomentumThreshold(indexName), // OR instead of AND
+      confluence_good: confluenceScore >= 60, // Lower confluence requirement
+      vwap_bullish: currentPrice > vwapData.vwap && (vwapData.vwapTrend === 'BULLISH' || vwapData.priceVsVwap > 0.05), // Price above VWAP with bullish bias
       time_filter: this.isWithinTradingHours(indexName)
     };
 
-    // ✅ TIGHTENED Multi-timeframe PE conditions (higher quality signals)
+    // ✅ OPTIMIZED Multi-timeframe PE conditions (balanced quality vs frequency + VWAP)
     const mtfPEConditions = {
-      majority_rsi_bearish: (+((rsi1 < 45)) + (+(rsi5 < 45)) + (+(rsi10 < 45))) >= 2, // Stronger RSI requirement
-      trend_alignment: currentPrice < sma1 && sma1 <= sma5 && sma5 <= sma10, // Strict trend alignment
-      momentum_strong: momentum1 < -this.getMomentumThreshold(indexName) && momentum5 < -this.getMomentumThreshold(indexName), // Index-specific momentum requirement
-      strong_confluence: confluenceScore >= 70, // Higher confluence requirement
+      rsi_bearish: (+((rsi1 < 48)) + (+(rsi5 < 48)) + (+(rsi10 < 48))) >= 2, // Relaxed RSI requirement
+      trend_alignment: currentPrice < sma1 && sma1 <= sma5, // Less strict - only 2 timeframes
+      momentum_strong: momentum1 < -this.getMomentumThreshold(indexName) || momentum5 < -this.getMomentumThreshold(indexName), // OR instead of AND
+      confluence_good: confluenceScore >= 60, // Lower confluence requirement
+      vwap_bearish: currentPrice < vwapData.vwap && (vwapData.vwapTrend === 'BEARISH' || vwapData.priceVsVwap < -0.05), // Price below VWAP with bearish bias
       time_filter: this.isWithinTradingHours(indexName)
     };
 
-    const mtfCEMet = Object.values(mtfCEConditions).every(c => c === true);
-    const mtfPEMet = Object.values(mtfPEConditions).every(c => c === true);
+    // ✅ SCORING SYSTEM: Require 5/6 conditions (including VWAP)
+    const mtfCEScore = Object.values(mtfCEConditions).filter(c => c === true).length;
+    const mtfPEScore = Object.values(mtfPEConditions).filter(c => c === true).length;
+    
+    const mtfCEMet = mtfCEScore >= 5; // 5 out of 6 conditions (higher bar with VWAP)
+    const mtfPEMet = mtfPEScore >= 5; // 5 out of 6 conditions (higher bar with VWAP)
 
     // Log multi-timeframe analysis every 20 seconds (less frequent due to complexity)
     const shouldLogMTF = Date.now() % 20000 < 1000;
     if (shouldLogMTF || mtfCEMet || mtfPEMet) {
-      logger.info(`🏆 ${indexName} Multi-Timeframe Confluence (TIGHTENED):`);
-      logger.info(`   💰 Price: ${currentPrice} | Confluence: ${confluenceScore.toFixed(0)}%`);
-      logger.info(`   📊 RSI: 1t=${rsi1.toFixed(1)} | 5t=${rsi5.toFixed(1)} | 10t=${rsi10.toFixed(1)}`);
+      logger.info(`🏆 ${indexName} Multi-Timeframe Confluence (OPTIMIZED + VWAP):`);
+      logger.info(`   💰 Price: ${currentPrice} | VWAP: ${vwapData.vwap} (${vwapData.priceVsVwap > 0 ? '+' : ''}${vwapData.priceVsVwap.toFixed(2)}%) | Trend: ${vwapData.vwapTrend}`);
+      logger.info(`   📊 RSI: 1t=${rsi1.toFixed(1)} | 5t=${rsi5.toFixed(1)} | 10t=${rsi10.toFixed(1)} | Confluence: ${confluenceScore.toFixed(0)}%`);
       logger.info(`   📈 Momentum: 1t=${momentum1.toFixed(2)}% | 5t=${momentum5.toFixed(2)}% | 10t=${momentum10.toFixed(2)}%`);
-      logger.info(`   🎯 CE: ${Object.values(mtfCEConditions).filter(c => c === true).length}/5 | PE: ${Object.values(mtfPEConditions).filter(c => c === true).length}/5`);
+      logger.info(`   🎯 CE: ${mtfCEScore}/6 (need 5+) | PE: ${mtfPEScore}/6 (need 5+)`);
 
       // Show CE condition status
-      if (Object.values(mtfCEConditions).filter(c => c === true).length < 5) {
-        logger.info(`   📋 CE Missing: ${mtfCEConditions.majority_rsi_bullish ? '' : 'RSI-Strong '} ${mtfCEConditions.trend_alignment ? '' : 'Trend-Aligned '} ${mtfCEConditions.momentum_strong ? '' : 'Strong-Momentum '} ${mtfCEConditions.strong_confluence ? '' : 'High-Confluence '} ${mtfCEConditions.time_filter ? '' : 'Time'}`);
+      if (mtfCEScore < 5) {
+        logger.info(`   📋 CE Missing: ${mtfCEConditions.rsi_bullish ? '' : 'RSI-Bullish '} ${mtfCEConditions.trend_alignment ? '' : 'Trend-Aligned '} ${mtfCEConditions.momentum_strong ? '' : 'Momentum '} ${mtfCEConditions.confluence_good ? '' : 'Confluence '} ${mtfCEConditions.vwap_bullish ? '' : 'VWAP-Bullish '} ${mtfCEConditions.time_filter ? '' : 'Time'}`);
       }
 
       // Show PE condition status
-      if (Object.values(mtfPEConditions).filter(c => c === true).length < 5) {
-        logger.info(`   📋 PE Missing: ${mtfPEConditions.majority_rsi_bearish ? '' : 'RSI-Strong '} ${mtfPEConditions.trend_alignment ? '' : 'Trend-Aligned '} ${mtfPEConditions.momentum_strong ? '' : 'Strong-Momentum '} ${mtfPEConditions.strong_confluence ? '' : 'High-Confluence '} ${mtfPEConditions.time_filter ? '' : 'Time'}`);
+      if (mtfPEScore < 5) {
+        logger.info(`   📋 PE Missing: ${mtfPEConditions.rsi_bearish ? '' : 'RSI-Bearish '} ${mtfPEConditions.trend_alignment ? '' : 'Trend-Aligned '} ${mtfPEConditions.momentum_strong ? '' : 'Momentum '} ${mtfPEConditions.confluence_good ? '' : 'Confluence '} ${mtfPEConditions.vwap_bearish ? '' : 'VWAP-Bearish '} ${mtfPEConditions.time_filter ? '' : 'Time'}`);
       }
     }
 
@@ -368,7 +382,7 @@ class TradingStrategy {
           ema: 0,
           rsi: parseFloat(rsi1.toFixed(2)),
           priceChange: parseFloat(momentum1.toFixed(2)),
-          vwap: parseFloat(sma1.toFixed(2))
+          vwap: parseFloat(vwapData.vwap.toFixed(2))
         }
       };
 
@@ -396,7 +410,7 @@ class TradingStrategy {
           ema: 0,
           rsi: parseFloat(rsi1.toFixed(2)),
           priceChange: parseFloat(momentum1.toFixed(2)),
-          vwap: parseFloat(sma1.toFixed(2))
+          vwap: parseFloat(vwapData.vwap.toFixed(2))
         }
       };
 
@@ -410,52 +424,62 @@ class TradingStrategy {
   private async analyzeBollingerRSIStrategy(
     indexName: IndexName,
     currentPrice: number,
-    prices: number[]
+    prices: number[],
+    priceBuffer: PriceBufferItem[]
   ): Promise<TradingSignal | null> {
     // Calculate indicators
     const rsi = this.calculateRSI(prices, 14);
     const bollinger = this.calculateBollingerBands(prices, 20, 2);
     const momentum = this.calculateMomentum(prices, 10);
     const volatility = this.calculateAdaptiveVolatility(prices);
+    
+    // ✅ VWAP analysis for bollinger strategy
+    const vwapData = this.calculateVWAP(priceBuffer, 20);
 
-    // ✅ TIGHTENED Strategy 1 Conditions: Bollinger Bands + RSI (Quality over quantity)
+    // ✅ OPTIMIZED Strategy 1 Conditions: Bollinger Bands + RSI + VWAP (Balanced approach)
     const bollingerCEConditions = {
-      price_near_lower_and_oversold: currentPrice <= bollinger.lower * 1.005 && rsi < 35, // Both conditions required
-      rsi_recovery_zone: rsi > 30 && rsi < 50, // Narrower RSI range
-      trend_support: currentPrice > bollinger.middle, // Must be above middle band
-      momentum_strong: momentum > this.getMomentumThreshold(indexName), // Index-specific momentum requirement
-      squeeze_or_expansion: bollinger.squeeze || volatility.isExpanding, // Volatility condition
+      price_near_lower: currentPrice <= bollinger.lower * 1.01 || rsi < 40, // OR condition for flexibility
+      rsi_recovery_zone: rsi > 28 && rsi < 55, // Wider RSI range
+      trend_or_squeeze: currentPrice > bollinger.middle || bollinger.squeeze, // OR condition
+      momentum_decent: momentum > this.getMomentumThreshold(indexName) * 0.75, // Reduced threshold
+      volatility_favorable: bollinger.squeeze || volatility.isExpanding || bollinger.bandwidth > 8, // More options
+      vwap_supportive: currentPrice > vwapData.vwap * 0.998 || vwapData.vwapTrend === 'BULLISH' || vwapData.priceVsVwap > -0.1, // Flexible VWAP condition
       time_filter: this.isWithinTradingHours(indexName)
     };
 
     const bollingerPEConditions = {
-      price_near_upper_and_overbought: currentPrice >= bollinger.upper * 0.995 && rsi > 65, // Both conditions required  
-      rsi_decline_zone: rsi < 70 && rsi > 50, // Narrower RSI range
-      trend_resistance: currentPrice < bollinger.middle, // Must be below middle band
-      momentum_strong: momentum < -this.getMomentumThreshold(indexName), // Index-specific momentum requirement
-      squeeze_or_expansion: bollinger.squeeze || volatility.isExpanding, // Volatility condition
+      price_near_upper: currentPrice >= bollinger.upper * 0.99 || rsi > 60, // OR condition for flexibility
+      rsi_decline_zone: rsi < 72 && rsi > 45, // Wider RSI range
+      trend_or_squeeze: currentPrice < bollinger.middle || bollinger.squeeze, // OR condition
+      momentum_decent: momentum < -this.getMomentumThreshold(indexName) * 0.75, // Reduced threshold
+      volatility_favorable: bollinger.squeeze || volatility.isExpanding || bollinger.bandwidth > 8, // More options
+      vwap_resistive: currentPrice < vwapData.vwap * 1.002 || vwapData.vwapTrend === 'BEARISH' || vwapData.priceVsVwap < 0.1, // Flexible VWAP condition
       time_filter: this.isWithinTradingHours(indexName)
     };
 
-    const bollingerCEMet = Object.values(bollingerCEConditions).every(c => c === true);
-    const bollingerPEMet = Object.values(bollingerPEConditions).every(c => c === true);
+    // ✅ SCORING SYSTEM: Require 5/7 conditions (including VWAP)
+    const bollingerCEScore = Object.values(bollingerCEConditions).filter(c => c === true).length;
+    const bollingerPEScore = Object.values(bollingerPEConditions).filter(c => c === true).length;
+    
+    const bollingerCEMet = bollingerCEScore >= 5; // 5 out of 7 conditions
+    const bollingerPEMet = bollingerPEScore >= 5; // 5 out of 7 conditions
 
     // Log strategy 1 analysis every 15 seconds
     const shouldLogBollinger = Date.now() % 15000 < 1000;
     if (shouldLogBollinger || bollingerCEMet || bollingerPEMet) {
-      logger.info(`🎯 ${indexName} Bollinger+RSI Strategy (TIGHTENED):`);
-      logger.info(`   💰 Price: ${currentPrice} | BB Upper: ${bollinger.upper.toFixed(2)} | Middle: ${bollinger.middle.toFixed(2)} | Lower: ${bollinger.lower.toFixed(2)}`);
-      logger.info(`   📊 RSI: ${rsi.toFixed(2)} | Momentum: ${momentum.toFixed(2)}% | Squeeze: ${bollinger.squeeze}`);
-      logger.info(`   📈 CE: ${Object.values(bollingerCEConditions).filter(c => c === true).length}/6 | PE: ${Object.values(bollingerPEConditions).filter(c => c === true).length}/6`);
+      logger.info(`🎯 ${indexName} Bollinger+RSI Strategy (OPTIMIZED + VWAP):`);
+      logger.info(`   💰 Price: ${currentPrice} | VWAP: ${vwapData.vwap} (${vwapData.priceVsVwap > 0 ? '+' : ''}${vwapData.priceVsVwap.toFixed(2)}%) | Trend: ${vwapData.vwapTrend}`);
+      logger.info(`   📊 BB: Upper=${bollinger.upper.toFixed(2)} | Middle=${bollinger.middle.toFixed(2)} | Lower=${bollinger.lower.toFixed(2)} | Squeeze=${bollinger.squeeze}`);
+      logger.info(`   📈 RSI: ${rsi.toFixed(2)} | Momentum: ${momentum.toFixed(2)}% | CE: ${bollingerCEScore}/7 (need 5+) | PE: ${bollingerPEScore}/7 (need 5+)`);
 
       // Show CE condition status
-      if (Object.values(bollingerCEConditions).filter(c => c === true).length < 6) {
-        logger.info(`   📋 CE Missing: ${bollingerCEConditions.price_near_lower_and_oversold ? '' : 'Lower+Oversold '} ${bollingerCEConditions.rsi_recovery_zone ? '' : 'RSI-Zone '} ${bollingerCEConditions.trend_support ? '' : 'Support '} ${bollingerCEConditions.momentum_strong ? '' : 'Strong-Momentum '} ${bollingerCEConditions.squeeze_or_expansion ? '' : 'Volatility '} ${bollingerCEConditions.time_filter ? '' : 'Time'}`);
+      if (bollingerCEScore < 5) {
+        logger.info(`   📋 CE Missing: ${bollingerCEConditions.price_near_lower ? '' : 'Near-Lower '} ${bollingerCEConditions.rsi_recovery_zone ? '' : 'RSI-Zone '} ${bollingerCEConditions.trend_or_squeeze ? '' : 'Trend/Squeeze '} ${bollingerCEConditions.momentum_decent ? '' : 'Momentum '} ${bollingerCEConditions.volatility_favorable ? '' : 'Volatility '} ${bollingerCEConditions.vwap_supportive ? '' : 'VWAP-Support '} ${bollingerCEConditions.time_filter ? '' : 'Time'}`);
       }
 
       // Show PE condition status  
-      if (Object.values(bollingerPEConditions).filter(c => c === true).length < 6) {
-        logger.info(`   📋 PE Missing: ${bollingerPEConditions.price_near_upper_and_overbought ? '' : 'Upper+Overbought '} ${bollingerPEConditions.rsi_decline_zone ? '' : 'RSI-Zone '} ${bollingerPEConditions.trend_resistance ? '' : 'Resistance '} ${bollingerPEConditions.momentum_strong ? '' : 'Strong-Momentum '} ${bollingerPEConditions.squeeze_or_expansion ? '' : 'Volatility '} ${bollingerPEConditions.time_filter ? '' : 'Time'}`);
+      if (bollingerPEScore < 5) {
+        logger.info(`   📋 PE Missing: ${bollingerPEConditions.price_near_upper ? '' : 'Near-Upper '} ${bollingerPEConditions.rsi_decline_zone ? '' : 'RSI-Zone '} ${bollingerPEConditions.trend_or_squeeze ? '' : 'Trend/Squeeze '} ${bollingerPEConditions.momentum_decent ? '' : 'Momentum '} ${bollingerPEConditions.volatility_favorable ? '' : 'Volatility '} ${bollingerPEConditions.vwap_resistive ? '' : 'VWAP-Resist '} ${bollingerPEConditions.time_filter ? '' : 'Time'}`);
       }
 
       // Strategy Analysis Update disabled for Telegram - user preference
@@ -503,7 +527,7 @@ class TradingStrategy {
           ema: 0,
           rsi: parseFloat(rsi.toFixed(2)),
           priceChange: parseFloat(momentum.toFixed(2)),
-          vwap: parseFloat(bollinger.middle.toFixed(2))
+          vwap: parseFloat(vwapData.vwap.toFixed(2))
         }
       };
 
@@ -529,7 +553,7 @@ class TradingStrategy {
           ema: 0,
           rsi: parseFloat(rsi.toFixed(2)),
           priceChange: parseFloat(momentum.toFixed(2)),
-          vwap: parseFloat(bollinger.middle.toFixed(2))
+          vwap: parseFloat(vwapData.vwap.toFixed(2))
         }
       };
 
@@ -543,49 +567,61 @@ class TradingStrategy {
   private async analyzePriceActionStrategy(
     indexName: IndexName,
     currentPrice: number,
-    prices: number[]
+    prices: number[],
+    priceBuffer: PriceBufferItem[]
   ): Promise<TradingSignal | null> {
     const rsi = this.calculateRSI(prices, 14);
     const sma = this.calculateSMA(prices, 20);
     const supportResistance = this.calculateSupportResistance(prices);
     const momentum = this.calculateMomentum(prices, 5); // Shorter period for faster signals
+    
+    // ✅ VWAP analysis for price action strategy
+    const vwapData = this.calculateVWAP(priceBuffer, 20);
 
-    // ✅ TIGHTENED Strategy 2: Price Action + Momentum (Higher quality setups)
+    // ✅ OPTIMIZED Strategy 2: Price Action + Momentum + VWAP (Balanced approach)
     const priceActionCEConditions = {
-      price_momentum_strong: momentum > this.getMomentumThreshold(indexName) && rsi > 50, // Index-specific momentum requirement
-      trend_bullish: currentPrice > sma && rsi > 55, // Both conditions required (not OR)
-      near_support: supportResistance.nearSupport, // Must be near support level
-      not_overbought: rsi < 70, // Stricter overbought level
+      momentum_positive: momentum > this.getMomentumThreshold(indexName) * 0.8 || rsi > 52, // OR condition with lower threshold
+      trend_favorable: currentPrice > sma || rsi > 50, // OR condition for flexibility
+      support_or_momentum: supportResistance.nearSupport || momentum > this.getMomentumThreshold(indexName), // OR condition
+      rsi_reasonable: rsi > 25 && rsi < 75, // Wider range
+      price_action_decent: Math.abs(momentum) > this.getMomentumThreshold(indexName) * 0.5, // Any decent movement
+      vwap_aligned: currentPrice > vwapData.vwap || vwapData.vwapTrend !== 'BEARISH' || vwapData.priceVsVwap > -0.15, // Flexible VWAP alignment
       time_filter: this.isWithinTradingHours(indexName)
     };
 
     const priceActionPEConditions = {
-      price_momentum_strong: momentum < -this.getMomentumThreshold(indexName) && rsi < 50, // Index-specific momentum requirement
-      trend_bearish: currentPrice < sma && rsi < 45, // Both conditions required (not OR)
-      near_resistance: supportResistance.nearResistance, // Must be near resistance level
-      not_oversold: rsi > 30, // Stricter oversold level
+      momentum_negative: momentum < -this.getMomentumThreshold(indexName) * 0.8 || rsi < 48, // OR condition with lower threshold
+      trend_favorable: currentPrice < sma || rsi < 50, // OR condition for flexibility
+      resistance_or_momentum: supportResistance.nearResistance || momentum < -this.getMomentumThreshold(indexName), // OR condition
+      rsi_reasonable: rsi > 25 && rsi < 75, // Wider range
+      price_action_decent: Math.abs(momentum) > this.getMomentumThreshold(indexName) * 0.5, // Any decent movement
+      vwap_aligned: currentPrice < vwapData.vwap || vwapData.vwapTrend !== 'BULLISH' || vwapData.priceVsVwap < 0.15, // Flexible VWAP alignment
       time_filter: this.isWithinTradingHours(indexName)
     };
 
-    const actionCEMet = Object.values(priceActionCEConditions).every(c => c === true);
-    const actionPEMet = Object.values(priceActionPEConditions).every(c => c === true);
+    // ✅ SCORING SYSTEM: Require 5/7 conditions (including VWAP)
+    const priceActionCEScore = Object.values(priceActionCEConditions).filter(c => c === true).length;
+    const priceActionPEScore = Object.values(priceActionPEConditions).filter(c => c === true).length;
+    
+    const actionCEMet = priceActionCEScore >= 5; // 5 out of 7 conditions
+    const actionPEMet = priceActionPEScore >= 5; // 5 out of 7 conditions
 
     // Log strategy 2 analysis every 15 seconds
     const shouldLogAction = Date.now() % 15000 < 1000;
     if (shouldLogAction || actionCEMet || actionPEMet) {
-      logger.info(`🚀 ${indexName} Price Action Strategy (TIGHTENED):`);
-      logger.info(`   💰 Price: ${currentPrice} | SMA: ${sma.toFixed(2)}`);
-      logger.info(`   📊 RSI: ${rsi.toFixed(2)} | Momentum: ${momentum.toFixed(2)}% | S/R: ${supportResistance.nearSupport ? 'Support' : ''} ${supportResistance.nearResistance ? 'Resistance' : ''}`);
-      logger.info(`   📈 CE: ${Object.values(priceActionCEConditions).filter(c => c === true).length}/5 | PE: ${Object.values(priceActionPEConditions).filter(c => c === true).length}/5`);
+      logger.info(`🚀 ${indexName} Price Action Strategy (OPTIMIZED + VWAP):`);
+      logger.info(`   💰 Price: ${currentPrice} | SMA: ${sma.toFixed(2)} | VWAP: ${vwapData.vwap} (${vwapData.priceVsVwap > 0 ? '+' : ''}${vwapData.priceVsVwap.toFixed(2)}%)`);
+      logger.info(`   📊 RSI: ${rsi.toFixed(2)} | Momentum: ${momentum.toFixed(2)}% | VWAP Trend: ${vwapData.vwapTrend} | S/R: ${supportResistance.nearSupport ? 'Support' : ''} ${supportResistance.nearResistance ? 'Resistance' : ''}`);
+      logger.info(`   📈 CE: ${priceActionCEScore}/7 (need 5+) | PE: ${priceActionPEScore}/7 (need 5+)`);
 
       // Show CE condition status
-      if (Object.values(priceActionCEConditions).filter(c => c === true).length < 5) {
-        logger.info(`   📋 CE Missing: ${priceActionCEConditions.price_momentum_strong ? '' : 'Strong-Momentum '} ${priceActionCEConditions.trend_bullish ? '' : 'Strong-Trend '} ${priceActionCEConditions.near_support ? '' : 'Near-Support '} ${priceActionCEConditions.not_overbought ? '' : 'Not-Overbought '} ${priceActionCEConditions.time_filter ? '' : 'Time'}`);
+      if (priceActionCEScore < 5) {
+        logger.info(`   📋 CE Missing: ${priceActionCEConditions.momentum_positive ? '' : 'Momentum+ '} ${priceActionCEConditions.trend_favorable ? '' : 'Trend '} ${priceActionCEConditions.support_or_momentum ? '' : 'Support/Mom '} ${priceActionCEConditions.rsi_reasonable ? '' : 'RSI-Range '} ${priceActionCEConditions.price_action_decent ? '' : 'Price-Action '} ${priceActionCEConditions.vwap_aligned ? '' : 'VWAP-Aligned '} ${priceActionCEConditions.time_filter ? '' : 'Time'}`);
       }
 
       // Show PE condition status
-      if (Object.values(priceActionPEConditions).filter(c => c === true).length < 5) {
-        logger.info(`   📋 PE Missing: ${priceActionPEConditions.price_momentum_strong ? '' : 'Strong-Momentum '} ${priceActionPEConditions.trend_bearish ? '' : 'Strong-Trend '} ${priceActionPEConditions.near_resistance ? '' : 'Near-Resistance '} ${priceActionPEConditions.not_oversold ? '' : 'Not-Oversold '} ${priceActionPEConditions.time_filter ? '' : 'Time'}`);
+      if (priceActionPEScore < 5) {
+        logger.info(`   📋 PE Missing: ${priceActionPEConditions.momentum_negative ? '' : 'Momentum- '} ${priceActionPEConditions.trend_favorable ? '' : 'Trend '} ${priceActionPEConditions.resistance_or_momentum ? '' : 'Resist/Mom '} ${priceActionPEConditions.rsi_reasonable ? '' : 'RSI-Range '} ${priceActionPEConditions.price_action_decent ? '' : 'Price-Action '} ${priceActionPEConditions.vwap_aligned ? '' : 'VWAP-Aligned '} ${priceActionPEConditions.time_filter ? '' : 'Time'}`);
       }
     }
 
@@ -612,7 +648,7 @@ class TradingStrategy {
           ema: 0,
           rsi: parseFloat(rsi.toFixed(2)),
           priceChange: parseFloat(momentum.toFixed(2)),
-          vwap: parseFloat(sma.toFixed(2))
+          vwap: parseFloat(vwapData.vwap.toFixed(2))
         }
       };
 
@@ -638,7 +674,7 @@ class TradingStrategy {
           ema: 0,
           rsi: parseFloat(rsi.toFixed(2)),
           priceChange: parseFloat(momentum.toFixed(2)),
-          vwap: parseFloat(sma.toFixed(2))
+          vwap: parseFloat(vwapData.vwap.toFixed(2))
         }
       };
 
@@ -1196,13 +1232,118 @@ class TradingStrategy {
 
     const returns = [];
     for (let i = 1; i < prices.length; i++) {
-      returns.push((prices[i] - prices[i - 1]) / prices[i - 1]);
+      const prevPrice = prices[i - 1];
+      if (prevPrice !== 0) {
+        returns.push((prices[i] - prevPrice) / prevPrice);
+      }
     }
 
+    if (returns.length === 0) return 0;
+    
     const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
     const variance = returns.reduce((acc, ret) => acc + Math.pow(ret - mean, 2), 0) / returns.length;
 
     return Math.sqrt(variance);
+  }
+
+  // ✅ NEW: VWAP calculation using price buffer data
+  private calculateVWAP(priceBuffer: PriceBufferItem[], period: number = 20): {
+    vwap: number;
+    priceVsVwap: number;
+    vwapTrend: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+  } {
+    if (priceBuffer.length < Math.min(period, 10)) {
+      // Fallback to simple average if insufficient data
+      const prices = priceBuffer.map(item => item.price);
+      if (prices.length === 0) {
+        return {
+          vwap: 0,
+          priceVsVwap: 0,
+          vwapTrend: 'NEUTRAL'
+        };
+      }
+      const avgPrice = prices.reduce((a, b) => a + b, 0) / prices.length;
+      return {
+        vwap: avgPrice,
+        priceVsVwap: 0,
+        vwapTrend: 'NEUTRAL'
+      };
+    }
+
+    // Use recent data up to the specified period
+    const recentData = priceBuffer.slice(-Math.min(period, priceBuffer.length));
+    
+    // Since we don't have actual volume data for indices, we'll use a proxy:
+    // Higher price movement = higher implied volume (more trading interest)
+    let totalPriceVolume = 0;
+    let totalVolume = 0;
+
+    for (let i = 0; i < recentData.length; i++) {
+      const price = recentData[i].price;
+      
+      // Calculate implied volume based on price movement and time
+      let impliedVolume = 1; // Base volume
+      
+      if (i > 0) {
+        const priceChange = Math.abs(price - recentData[i - 1].price);
+        const priceChangePercent = priceChange / recentData[i - 1].price;
+        // Higher price movement = higher implied volume
+        impliedVolume = 1 + (priceChangePercent * 1000); // Scale factor
+      }
+      
+      totalPriceVolume += price * impliedVolume;
+      totalVolume += impliedVolume;
+    }
+
+    const vwap = totalVolume > 0 ? totalPriceVolume / totalVolume : recentData[recentData.length - 1].price;
+    const currentPrice = recentData[recentData.length - 1].price;
+    const priceVsVwap = vwap > 0 ? ((currentPrice - vwap) / vwap) * 100 : 0; // Percentage difference, avoid division by zero
+
+    // Determine VWAP trend based on price vs VWAP and recent VWAP slope
+    let vwapTrend: 'BULLISH' | 'BEARISH' | 'NEUTRAL' = 'NEUTRAL';
+    
+    if (recentData.length >= 5) {
+      const earlyVwap = this.calculateSimpleVWAP(recentData.slice(0, Math.floor(recentData.length / 2)));
+      const lateVwap = this.calculateSimpleVWAP(recentData.slice(Math.floor(recentData.length / 2)));
+      
+      const vwapSlope = earlyVwap > 0 ? ((lateVwap - earlyVwap) / earlyVwap) * 100 : 0;
+      
+      if (currentPrice > vwap && vwapSlope > 0.02) {
+        vwapTrend = 'BULLISH';
+      } else if (currentPrice < vwap && vwapSlope < -0.02) {
+        vwapTrend = 'BEARISH';
+      }
+    }
+
+    return {
+      vwap: parseFloat(vwap.toFixed(2)),
+      priceVsVwap: parseFloat(priceVsVwap.toFixed(3)),
+      vwapTrend
+    };
+  }
+
+  // Helper method for simple VWAP calculation
+  private calculateSimpleVWAP(data: PriceBufferItem[]): number {
+    if (data.length === 0) return 0;
+    
+    let totalPriceVolume = 0;
+    let totalVolume = 0;
+
+    for (let i = 0; i < data.length; i++) {
+      const price = data[i].price;
+      let impliedVolume = 1;
+      
+      if (i > 0) {
+        const priceChange = Math.abs(price - data[i - 1].price);
+        const priceChangePercent = priceChange / data[i - 1].price;
+        impliedVolume = 1 + (priceChangePercent * 1000);
+      }
+      
+      totalPriceVolume += price * impliedVolume;
+      totalVolume += impliedVolume;
+    }
+
+    return totalVolume > 0 ? totalPriceVolume / totalVolume : data[data.length - 1].price;
   }
 
 

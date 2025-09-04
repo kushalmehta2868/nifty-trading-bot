@@ -162,12 +162,7 @@ export function formatTimeUntilMarketOpen(date: Date = new Date()): string {
   const hours = Math.floor(msUntilOpen / (1000 * 60 * 60));
   const minutes = Math.floor((msUntilOpen % (1000 * 60 * 60)) / (1000 * 60));
 
-  // Debug logging for troubleshooting
-  console.log(`[DEBUG] Current time: ${date.toISOString()}`);
-  console.log(`[DEBUG] IST time: ${istDate.toISOString()}`);
-  console.log(`[DEBUG] Next open: ${nextOpen.toISOString()}`);
-  console.log(`[DEBUG] Ms until open: ${msUntilOpen}`);
-  console.log(`[DEBUG] Hours: ${hours}, Minutes: ${minutes}`);
+  // Debug logging disabled for production
 
   if (hours > 24) {
     const days = Math.floor(hours / 24);

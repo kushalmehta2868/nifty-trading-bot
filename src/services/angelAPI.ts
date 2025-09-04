@@ -233,7 +233,7 @@ class AngelAPI {
       return response.data;
     } catch (error) {
       if (axios.isAxiosError(error)) {
-        console.error('❌ API Error:', {
+        logger.error('❌ API Error:', {
           status: error.response?.status,
           statusText: error.response?.statusText,
           data: error.response?.data,
@@ -434,7 +434,7 @@ class AngelAPI {
   ): Promise<number | null> {
     try {
       const response = await this.getQuote('NFO', tradingSymbol, symbolToken);
-      console.log("response ==> ", response);
+      logger.debug("Quote response:", response);
       if (response && response.ltp) {
         return parseFloat(response.ltp);
       }

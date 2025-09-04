@@ -26,7 +26,7 @@ export const config: Config = {
   strategy: {
     emaPeriod: parseInt(process.env.EMA_PERIOD || '20'),
     rsiPeriod: parseInt(process.env.RSI_PERIOD || '14'),
-    confidenceThreshold: parseInt(process.env.CONFIDENCE_THRESHOLD || '70'),
+    confidenceThreshold: parseInt(process.env.CONFIDENCE_THRESHOLD || '60'),
     breakoutThreshold: parseFloat(process.env.BREAKOUT_THRESHOLD || '0.3')
   },
   indices: {
