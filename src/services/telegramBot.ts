@@ -8,6 +8,9 @@ class TelegramBotService {
   private bot: TelegramBot | null = null;
   private chatId: string = '';
   private signalsToday = 0;
+  private dailyPnL = 0;
+  private winningSignals = 0;
+  private lastResetDate = new Date().toDateString();
   private eventListeners: Array<{ event: string; handler: Function }> = [];
 
   constructor() {
@@ -25,6 +28,7 @@ class TelegramBotService {
 
     // Listen for trading signals
     const tradingSignalHandler = async (signal: TradingSignal) => {
+      this.checkDailyReset(); // Reset counters if new day
       logger.info(`📱 Preparing to send Telegram signal: ${signal.indexName} ${signal.optionType} (Confidence: ${signal.confidence.toFixed(1)}%)`);
       await this.sendTradingSignal(signal);
       this.signalsToday++;
@@ -50,8 +54,16 @@ class TelegramBotService {
     this.eventListeners.push({ event: 'orderFilled', handler: orderFilledHandler });
 
     // Listen for order exits (target/SL hit)
-    const orderExitedHandler = async (data: { order: any, message: string }) => {
+    const orderExitedHandler = async (data: { order: any, message: string, pnl?: number }) => {
       await this.sendMessage(data.message);
+      
+      // Track daily P&L and winning signals
+      if (data.pnl !== undefined) {
+        this.dailyPnL += data.pnl;
+        if (data.pnl > 0) {
+          this.winningSignals++;
+        }
+      }
     };
     (process as any).on('orderExited', orderExitedHandler);
     this.eventListeners.push({ event: 'orderExited', handler: orderExitedHandler });
@@ -202,7 +214,8 @@ ${marketStatusText}
 • NIFTY & Bank NIFTY Options (OTM strikes for liquidity)
 
 ⏰ *Market Hours:*
-• NSE: 9:30 AM - 3:00 PM (Auto-activation)
+• NSE: 9:30 AM - 3:00 PM (Market open)
+• Signals: 9:30 AM - 2:45 PM (New trades)
 
 🔧 *Configuration:*
 • Auto Trade: ${config.trading.autoTrade ? '✅ Enabled' : '❌ Disabled'}
@@ -326,30 +339,27 @@ ${status === 'connected' ? '✅ Live data streaming resumed' : '⚠️ Switching
     }
   }
 
-  // Send hourly market summary
-  public async sendHourlyMarketSummary(): Promise<void> {
+  // Send daily market summary (crisp and concise)
+  public async sendDailyMarketSummary(): Promise<void> {
     if (!this.bot) return;
 
     try {
-      const currentHour = new Date().getHours();
+      const today = new Date().toLocaleDateString('en-IN');
       const message = `
-🕐 *Hourly Market Summary* (${currentHour}:00)
+📊 *Daily Summary* (${today})
 
-📊 *Signals Today:* ${this.signalsToday}
-🏆 *Strategies Active:* Multi-TF, Bollinger+RSI, Price Action
-📈 *Markets:* ${isNSEMarketOpen() ? '🟢 NSE Open' : '🔴 NSE Closed'}
+🎯 *Signals:* ${this.signalsToday}
+💰 *P&L:* ${this.dailyPnL > 0 ? '+' : ''}₹${this.dailyPnL.toFixed(0)}
+📈 *Win Rate:* ${this.signalsToday > 0 ? Math.round((this.winningSignals / this.signalsToday) * 100) : 0}%
+⚡ *Status:* All systems operational
 
-⚡ *System Status:* All strategies monitoring
-🔗 *Data Feed:* Angel One WebSocket
-💪 *Bot Health:* Operating normally
-
-*Next update in 1 hour*
+*Next update tomorrow*
       `.trim();
 
       await this.sendMessage(message);
-      logger.info(`🕐 Hourly market summary sent for hour ${currentHour}`);
+      logger.info('📊 Daily market summary sent');
     } catch (error) {
-      logger.error('Failed to send hourly summary:', (error as Error).message);
+      logger.error('Failed to send daily summary:', (error as Error).message);
     }
   }
 
@@ -381,6 +391,18 @@ ${status === 'connected' ? '✅ Live data streaming resumed' : '⚠️ Switching
       logger.info('📊 Daily trading summary sent');
     } catch (error) {
       logger.error('Failed to send daily summary:', (error as Error).message);
+    }
+  }
+
+  // Check if we need to reset daily counters
+  private checkDailyReset(): void {
+    const currentDate = new Date().toDateString();
+    if (this.lastResetDate !== currentDate) {
+      this.signalsToday = 0;
+      this.dailyPnL = 0;
+      this.winningSignals = 0;
+      this.lastResetDate = currentDate;
+      logger.info('📊 Daily counters reset for new trading day');
     }
   }
 

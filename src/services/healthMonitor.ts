@@ -30,6 +30,7 @@ interface SystemHealth {
 class HealthMonitor {
   private monitorInterval: NodeJS.Timeout | null = null;
   private lastHealthCheck = 0;
+  private lastSummaryDate = '';
   private consecutiveUnstableConnections = 0;
 
   public async initialize(): Promise<void> {
@@ -63,11 +64,12 @@ class HealthMonitor {
         });
       }
       
-      // Send hourly summary to Telegram
+      // Send daily summary to Telegram (disabled hourly)
       const currentTime = Date.now();
-      if (currentTime - this.lastHealthCheck > 3600000) { // Every hour
-        await this.sendHourlySummary(health);
-        this.lastHealthCheck = currentTime;
+      const currentDate = new Date().toDateString();
+      if (this.lastSummaryDate !== currentDate && new Date().getHours() === 17) { // Daily at 5 PM
+        await this.sendDailySummary(health);
+        this.lastSummaryDate = currentDate;
       }
       
     } catch (error) {
@@ -208,15 +210,15 @@ class HealthMonitor {
     }
   }
 
-  private async sendHourlySummary(health: SystemHealth): Promise<void> {
+  private async sendDailySummary(health: SystemHealth): Promise<void> {
     try {
       // Import telegramBot here to avoid circular dependencies
       const { telegramBot } = await import('./telegramBot');
-      await telegramBot.sendHourlyMarketSummary();
+      await telegramBot.sendDailyMarketSummary();
       
-      logger.info('📱 Hourly health summary sent to Telegram');
+      logger.info('📱 Daily health summary sent to Telegram');
     } catch (error) {
-      logger.error('Failed to send hourly summary:', (error as Error).message);
+      logger.error('Failed to send daily summary:', (error as Error).message);
     }
   }
 

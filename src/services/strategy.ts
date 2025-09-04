@@ -248,8 +248,8 @@ class TradingStrategy {
       const shouldLog = Date.now() % 30000 < 1000;
       if (shouldLog) {
         const currentTime = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' });
-        const hours = '9:30 AM - 3:00 PM';
-        logger.info(`⏰ ${indexName} - Outside trading hours (${currentTime}), signals disabled during ${hours}`);
+        const hours = '9:30 AM - 2:45 PM';
+        logger.info(`⏰ ${indexName} - Outside signal hours (${currentTime}), new trades disabled after 2:45 PM - active during ${hours}`);
       }
       return null;
     }
@@ -1387,14 +1387,14 @@ class TradingStrategy {
       return isMarketOpen(); // General check
     }
 
-    // NSE trading hours: 9:30 AM to 3:00 PM (for signals)
+    // NSE trading hours: 9:30 AM to 2:45 PM (for new signals only)
     const startTime = 930;  // 9:30 AM
-    const endTime = 1500;   // 3:00 PM
+    const endTime = 1445;   // 2:45 PM (15 minutes before market close)
     const isOpen = currentTime >= startTime && currentTime <= endTime;
 
     // Log NSE hours for debugging
     if (!isOpen) {
-      logger.debug(`NSE ${indexName} outside hours: ${currentTime} (need 930-1500)`);
+      logger.debug(`NSE ${indexName} outside signal hours: ${currentTime} (need 930-1445)`);
     }
 
     return isOpen;

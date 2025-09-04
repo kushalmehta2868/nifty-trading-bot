@@ -38,10 +38,6 @@ class WebSocketFeed {
       if (!authResult) {
         throw new Error('Authentication failed');
       }
-
-      await angelAPI.debugAngelFormats();
-      // await angelAPI.testTokenLTP(); // Verify tokens work via REST
-
       // Try WebSocket first
       try {
         await this.connect();
