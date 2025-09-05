@@ -642,22 +642,22 @@ class OrderService {
     }
   }
 
-  private async placeSmartOrder(signal: TradingSignal, quantity: number, config: SmartOrderConfig): Promise<OrderResponse> {
-    switch (config.orderType) {
+  private async placeSmartOrder(signal: TradingSignal, quantity: number, smartConfig: SmartOrderConfig): Promise<OrderResponse> {
+    switch (smartConfig.orderType) {
       case OrderType.BRACKET:
-        return this.placeBracketOrder(signal, quantity, config);
+        return this.placeBracketOrder(signal, quantity, smartConfig);
       case OrderType.LIMIT:
-        return this.placeLimitOrder(signal, quantity, config);
+        return this.placeLimitOrder(signal, quantity, smartConfig);
       case OrderType.ICEBERG:
-        return this.placeIcebergOrder(signal, quantity, config);
+        return this.placeIcebergOrder(signal, quantity, smartConfig);
       case OrderType.TWAP:
-        return this.placeTWAPOrder(signal, quantity, config);
+        return this.placeTWAPOrder(signal, quantity, smartConfig);
       default:
-        return this.placeBracketOrder(signal, quantity, config);
+        return this.placeBracketOrder(signal, quantity, smartConfig);
     }
   }
 
-  private async placeBracketOrder(signal: TradingSignal, quantity: number, config: SmartOrderConfig): Promise<OrderResponse> {
+  private async placeBracketOrder(signal: TradingSignal, quantity: number, smartConfig: SmartOrderConfig): Promise<OrderResponse> {
     try {
       logger.info(`🤖 Placing Smart Bracket Order for ${signal.optionSymbol}`);
 
@@ -676,8 +676,8 @@ class OrderService {
       }
 
       // Smart pricing with slippage protection
-      const limitPrice = config.priceImprovement ? 
-        signal.entryPrice * (1 - config.maxSlippage) : 
+      const limitPrice = smartConfig.priceImprovement ? 
+        signal.entryPrice * (1 - smartConfig.maxSlippage) : 
         signal.entryPrice;
 
       const orderDetails: OrderDetails = {
@@ -686,9 +686,9 @@ class OrderService {
         symboltoken: symbolToken,
         transactiontype: 'BUY',
         exchange: 'NFO',
-        ordertype: config.orderType === OrderType.BRACKET ? 'MARKET' : 'LIMIT',
+        ordertype: smartConfig.orderType === OrderType.BRACKET ? 'MARKET' : 'LIMIT',
         producttype: 'BO',
-        duration: config.timeInForce,
+        duration: smartConfig.timeInForce,
         price: limitPrice.toString(),
         squareoff: signal.target.toString(),
         stoploss: signal.stopLoss.toString(),
@@ -696,10 +696,10 @@ class OrderService {
       };
 
       logger.info(`🧠 Smart Order Configuration:`, {
-        OrderType: config.orderType,
-        MaxSlippage: `${(config.maxSlippage * 100).toFixed(2)}%`,
-        TimeInForce: config.timeInForce,
-        PriceImprovement: config.priceImprovement,
+        OrderType: smartConfig.orderType,
+        MaxSlippage: `${(smartConfig.maxSlippage * 100).toFixed(2)}%`,
+        TimeInForce: smartConfig.timeInForce,
+        PriceImprovement: smartConfig.priceImprovement,
         LimitPrice: `₹${limitPrice.toFixed(2)}`
       });
 
@@ -738,34 +738,34 @@ class OrderService {
     }
   }
 
-  private async placeLimitOrder(signal: TradingSignal, quantity: number, config: SmartOrderConfig): Promise<OrderResponse> {
+  private async placeLimitOrder(signal: TradingSignal, quantity: number, smartConfig: SmartOrderConfig): Promise<OrderResponse> {
     // Implementation for limit orders with price improvement
     logger.info(`📊 Placing Smart Limit Order for ${signal.optionSymbol}`);
     
-    const limitPrice = signal.entryPrice * (1 - config.maxSlippage);
+    const limitPrice = signal.entryPrice * (1 - smartConfig.maxSlippage);
     
     // For now, use bracket order structure but with limit price logic
-    return this.placeBracketOrder(signal, quantity, { ...config, priceImprovement: true });
+    return this.placeBracketOrder(signal, quantity, { ...smartConfig, priceImprovement: true });
   }
 
-  private async placeIcebergOrder(signal: TradingSignal, quantity: number, config: SmartOrderConfig): Promise<OrderResponse> {
+  private async placeIcebergOrder(signal: TradingSignal, quantity: number, smartConfig: SmartOrderConfig): Promise<OrderResponse> {
     // Implementation for iceberg orders (breaking large orders into smaller chunks)
-    logger.info(`🧊 Placing Iceberg Order for ${signal.optionSymbol} - Total: ${quantity}, Chunks: ${config.icebergQuantity}`);
+    logger.info(`🧊 Placing Iceberg Order for ${signal.optionSymbol} - Total: ${quantity}, Chunks: ${smartConfig.icebergQuantity}`);
     
     // For simplicity, place the full order but log the iceberg strategy
-    logger.info(`📈 Iceberg Strategy: Breaking ${quantity} into ${Math.ceil(quantity / (config.icebergQuantity || 1))} chunks`);
+    logger.info(`📈 Iceberg Strategy: Breaking ${quantity} into ${Math.ceil(quantity / (smartConfig.icebergQuantity || 1))} chunks`);
     
-    return this.placeBracketOrder(signal, quantity, config);
+    return this.placeBracketOrder(signal, quantity, smartConfig);
   }
 
-  private async placeTWAPOrder(signal: TradingSignal, quantity: number, config: SmartOrderConfig): Promise<OrderResponse> {
+  private async placeTWAPOrder(signal: TradingSignal, quantity: number, smartConfig: SmartOrderConfig): Promise<OrderResponse> {
     // Implementation for TWAP orders (time-weighted average price)
-    logger.info(`⏰ Placing TWAP Order for ${signal.optionSymbol} over ${config.twapDuration} seconds`);
+    logger.info(`⏰ Placing TWAP Order for ${signal.optionSymbol} over ${smartConfig.twapDuration} seconds`);
     
     // For simplicity, place the full order but log the TWAP strategy
-    logger.info(`📊 TWAP Strategy: Executing over ${config.twapDuration} seconds for better average price`);
+    logger.info(`📊 TWAP Strategy: Executing over ${smartConfig.twapDuration} seconds for better average price`);
     
-    return this.placeBracketOrder(signal, quantity, config);
+    return this.placeBracketOrder(signal, quantity, smartConfig);
   }
 
   private async placeRealOrder(signal: TradingSignal, quantity: number): Promise<OrderResponse> {
