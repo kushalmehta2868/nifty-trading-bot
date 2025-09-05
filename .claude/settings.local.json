@@ -9,7 +9,8 @@
       "Bash(npm run:*)",
       "Bash(npm test)",
       "Bash(node:*)",
-      "Bash(npx ts-node:*)"
+      "Bash(npx ts-node:*)",
+      "WebSearch"
     ],
     "deny": [],
     "ask": []

@@ -579,9 +579,11 @@ class TradingStrategy {
     try {
       logger.info(`Fetching real option price for ${signal.optionSymbol}`);
 
-      // Generate expiry string (format: 29AUG24)
-      const expiry = this.generateExpiryString();
+      // Generate expiry string with index-specific logic
+      const expiry = this.generateExpiryString(signal.indexName);
       const strike = this.calculateStrike(signal.spotPrice, signal.indexName);
+
+      logger.info(`Using expiry: ${expiry} for ${signal.indexName} option with strike: ${strike}`);
 
       // Get option token first
       const tokenResponse = await angelAPI.getOptionToken(
@@ -592,8 +594,8 @@ class TradingStrategy {
       );
 
       if (!tokenResponse) {
-        logger.error(`CRITICAL: Could not get token for ${signal.optionSymbol}`);
-        throw new Error('Option token lookup failed');
+        logger.error(`CRITICAL: Could not get token for ${signal.optionSymbol} with expiry ${expiry}`);
+        throw new Error(`Option token lookup failed for ${signal.indexName} expiry ${expiry}`);
       }
 
       // Fetch real option price using token
@@ -613,20 +615,58 @@ class TradingStrategy {
     }
   }
 
-  private generateExpiryString(): string {
-    // NSE weekly options logic
+  private generateExpiryString(indexName?: IndexName): string {
     const today = new Date();
-    const nextTuesday = new Date(today);
-    const daysUntilTuesday = (2 - today.getDay() + 7) % 7;
-    const adjustedDays = daysUntilTuesday === 0 ? 7 : daysUntilTuesday;
-    nextTuesday.setDate(today.getDate() + adjustedDays);
+    
+    if (indexName === 'BANKNIFTY') {
+      // BANKNIFTY: Monthly expiry only (no weekly since Nov 2024)
+      // Expiry: Last Thursday of the month
+      const currentMonth = today.getMonth();
+      const currentYear = today.getFullYear();
+      
+      // Find last Thursday of current month
+      const lastDayOfMonth = new Date(currentYear, currentMonth + 1, 0);
+      let lastThursday = new Date(lastDayOfMonth);
+      
+      // Move backward to find last Thursday
+      while (lastThursday.getDay() !== 4) { // 4 = Thursday
+        lastThursday.setDate(lastThursday.getDate() - 1);
+      }
+      
+      // If last Thursday is today or has passed, move to next month
+      if (lastThursday <= today) {
+        const nextMonth = currentMonth + 1;
+        const nextYear = nextMonth > 11 ? currentYear + 1 : currentYear;
+        const adjustedMonth = nextMonth > 11 ? 0 : nextMonth;
+        
+        const lastDayOfNextMonth = new Date(nextYear, adjustedMonth + 1, 0);
+        lastThursday = new Date(lastDayOfNextMonth);
+        
+        while (lastThursday.getDay() !== 4) {
+          lastThursday.setDate(lastThursday.getDate() - 1);
+        }
+      }
+      
+      const day = lastThursday.getDate().toString().padStart(2, '0');
+      const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+      const month = months[lastThursday.getMonth()];
+      const year = lastThursday.getFullYear().toString().slice(-2);
+      
+      return `${day}${month}${year}`;
+    } else {
+      // NIFTY: Weekly expiry on Tuesday (changed from Thursday since Sept 1, 2025)
+      const nextTuesday = new Date(today);
+      const daysUntilTuesday = (2 - today.getDay() + 7) % 7; // 2 = Tuesday
+      const adjustedDays = daysUntilTuesday === 0 ? 7 : daysUntilTuesday;
+      nextTuesday.setDate(today.getDate() + adjustedDays);
 
-    const day = nextTuesday.getDate().toString().padStart(2, '0');
-    const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-    const month = months[nextTuesday.getMonth()];
-    const year = nextTuesday.getFullYear().toString().slice(-2);
+      const day = nextTuesday.getDate().toString().padStart(2, '0');
+      const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+      const month = months[nextTuesday.getMonth()];
+      const year = nextTuesday.getFullYear().toString().slice(-2);
 
-    return `${day}${month}${year}`;
+      return `${day}${month}${year}`;
+    }
   }
 
   private calculateEMA(prices: number[], period: number): number {
@@ -921,8 +961,8 @@ class TradingStrategy {
 
 
   private generateOptionSymbol(indexName: IndexName, strike: number, optionType: OptionType): string {
-    const expiryString = this.generateExpiryString();
-    // NSE options
+    const expiryString = this.generateExpiryString(indexName);
+    // NSE options format: NIFTY03SEP25024700CE or BANKNIFTY26SEP2552500PE
     return `${indexName}${expiryString}${strike}${optionType}`;
   }
 
