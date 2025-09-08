@@ -427,19 +427,22 @@ class OrderService {
       logger.info(`🔄 Processing ${config.trading.paperTrading ? 'PAPER' : 'REAL'} order for ${signal.optionSymbol}`);
       logger.info(`💰 Order Details: Entry=₹${signal.entryPrice} | Target=₹${signal.target} | SL=₹${signal.stopLoss}`);
 
-      // 🎯 IDENTICAL BALANCE CHECK for both paper and real trading
-      logger.info(`💰 Checking account balance before ${config.trading.paperTrading ? 'paper' : 'real'} order placement...`);
-      const hasBalance = await this.checkSufficientBalance(signal);
-      if (!hasBalance) {
-        const tradingMode = config.trading.paperTrading ? 'paper' : 'real';
-        logger.error(`❌ INSUFFICIENT BALANCE - Cannot place ${tradingMode} order`);
-        (process as any).emit('balanceInsufficient', {
-          signal,
-          message: `🚨 *INSUFFICIENT BALANCE ALERT*\n📈 *${signal.optionSymbol}*\n\n❌ Cannot place ${tradingMode} order - insufficient margin\n💰 Required: ~₹${(signal.entryPrice * config.indices[signal.indexName].lotSize * 0.2).toFixed(0)}\n\n🔧 ${config.trading.paperTrading ? 'Add margin to account for realistic paper trading' : 'Please add margin to continue trading'}`
-        });
-        return;
+      // 🎯 BALANCE CHECK - Skip for paper trading
+      if (!config.trading.paperTrading) {
+        logger.info(`💰 Checking account balance before real order placement...`);
+        const hasBalance = await this.checkSufficientBalance(signal);
+        if (!hasBalance) {
+          logger.error(`❌ INSUFFICIENT BALANCE - Cannot place real order`);
+          (process as any).emit('balanceInsufficient', {
+            signal,
+            message: `🚨 *INSUFFICIENT BALANCE ALERT*\n📈 *${signal.optionSymbol}*\n\n❌ Cannot place real order - insufficient margin\n💰 Required: ~₹${(signal.entryPrice * config.indices[signal.indexName].lotSize * 0.2).toFixed(0)}\n\n🔧 Please add margin to continue trading`
+          });
+          return;
+        }
+        logger.info(`✅ Balance check passed - proceeding with real order`);
+      } else {
+        logger.info(`📄 Paper trading mode - skipping balance check`);
       }
-      logger.info(`✅ Balance check passed - proceeding with ${config.trading.paperTrading ? 'paper' : 'real'} order`);
 
       // 🎯 IDENTICAL ORDER PREPARATION for both modes
       const optimalQuantity = await this.calculateOptimalPositionSize(signal);
