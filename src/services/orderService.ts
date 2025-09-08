@@ -1107,35 +1107,7 @@ class OrderService {
     }
   }
 
-  private sendEntryNotification(order: ActiveOrder): void {
-    const tradeType = order.isPaperTrade ? '📄' : '💰';
-    
-    const message = `
-✅ *ENTRY* ${tradeType}
-📈 ${order.signal.optionSymbol}
-💰 Entry: ₹${order.entryPrice} | 🎯 Target: ₹${order.signal.target} | 🛑 SL: ₹${order.signal.stopLoss}
-    `.trim();
 
-    (process as any).emit('orderFilled', { order, message });
-  }
-
-  private sendExitNotification(order: ActiveOrder): void {
-    const isProfit = order.exitReason === 'TARGET';
-    const emoji = isProfit ? '🚀' : '🛑';
-    const resultText = isProfit ? 'PROFIT' : 'STOPLOSS';
-    const pnlColor = isProfit ? '💰' : '💸';
-    const tradeType = order.isPaperTrade ? '📄' : '💰';
-
-    const message = `
-${emoji} *${resultText}* ${tradeType}
-📈 ${order.signal.optionSymbol}
-💰 Entry: ₹${order.entryPrice} | Exit: ₹${order.exitPrice}
-${pnlColor} P&L: ₹${order.pnl?.toFixed(2)} | Daily: ₹${this.dailyPnL.toFixed(2)}
-    `.trim();
-
-    logger.info(`📱 Sending exit notification to Telegram`);
-    (process as any).emit('orderExited', { order, message });
-  }
 
   public getDailyStats(): DailyStats {
     const performanceMetrics = this.performanceTracker.calculateMetrics();
@@ -1635,7 +1607,8 @@ ${Object.keys(healthStatus).length === 0 ? '✅ All systems operational' :
       let exitPrice: number = 0;
       let exitReason: 'TARGET' | 'STOPLOSS' = 'TARGET';
       
-      logger.info(`🔍 EXIT CONDITIONS CHECK: ${activeOrder.signal.optionSymbol}`);
+      logger.info(`🔍 EXIT CONDITIONS CHECK: ${activeOrder.signal.optionSymbol} (${activeOrder.signal.indexName})`);
+      logger.info(`   Index: ${activeOrder.signal.indexName} | Lot Size: ${config.indices[activeOrder.signal.indexName].lotSize}`);
       logger.info(`   Current Price: ₹${currentPrice}`);
       logger.info(`   Target Price:  ₹${target} ${currentPrice >= target ? '✅ HIT' : '❌ NOT HIT'}`);
       logger.info(`   Stop Loss:     ₹${stopLoss} ${currentPrice <= stopLoss ? '✅ HIT' : '❌ NOT HIT'}`);
@@ -1958,21 +1931,162 @@ ${Object.keys(healthStatus).length === 0 ? '✅ All systems operational' :
     return 'Price Action+Momentum';
   }
 
+  private sendEntryNotification(order: ActiveOrder): void {
+    const tradeType = order.isPaperTrade ? '📄 PAPER' : '💰 REAL';
+    const signal = order.signal;
+    
+    const message = `
+🎯 *ENTRY FILLED* ${tradeType}
+📈 ${signal.optionSymbol}
+🏦 ${signal.indexName} (Lot: ${config.indices[signal.indexName].lotSize})
+💰 Entry: ₹${order.entryPrice || signal.entryPrice}
+🎯 Target: ₹${signal.target}
+🛑 Stop Loss: ₹${signal.stopLoss}
+📊 Confidence: ${signal.confidence.toFixed(1)}%
+⏰ Time: ${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })}
+    `.trim();
+
+    logger.info(`📱 Sending entry notification: ${signal.optionSymbol}`);
+    (process as any).emit('orderFilled', { order, message });
+  }
+
+  private sendExitNotification(order: ActiveOrder): void {
+    const isProfit = order.exitReason === 'TARGET';
+    const emoji = isProfit ? '🚀' : '🛑';
+    const resultText = isProfit ? 'PROFIT TARGET' : 'STOP LOSS';
+    const pnlColor = isProfit ? '💰' : '💸';
+    const tradeType = order.isPaperTrade ? '📄 PAPER' : '💰 REAL';
+    
+    const entryPrice = order.entryPrice || order.signal.entryPrice;
+    const lotSize = config.indices[order.signal.indexName].lotSize;
+    const pnl = ((order.exitPrice || 0) - entryPrice) * lotSize;
+    
+    const message = `
+${emoji} *${resultText}* ${tradeType}
+📈 ${order.signal.optionSymbol}
+🏦 ${order.signal.indexName} (Lot: ${lotSize})
+💰 Entry: ₹${entryPrice} | Exit: ₹${order.exitPrice}
+${pnlColor} P&L: ₹${pnl.toFixed(2)}
+📊 Daily P&L: ₹${this.dailyPnL.toFixed(2)}
+⏰ Exit Time: ${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })}
+    `.trim();
+
+    logger.info(`📱 Sending exit notification: ${order.signal.optionSymbol} - ${resultText}`);
+    (process as any).emit('orderExited', { order, message });
+  }
+
   private generateExpiryString(indexName: string): string {
-    // Generate expiry string for the current weekly expiry
     const today = new Date();
-    const currentDay = today.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+    let expiryDate: Date;
+    let expiryDescription: string;
     
-    // For NIFTY/BANKNIFTY weekly options, expiry is on Thursday (day 4)
-    let daysUntilExpiry = 4 - currentDay; // Thursday is day 4
-    
-    // If today is Friday/Saturday/Sunday, next expiry is next Thursday
-    if (daysUntilExpiry <= 0) {
-      daysUntilExpiry += 7;
+    if (indexName === 'NIFTY') {
+      // NIFTY: Weekly expiry on every Tuesday
+      const currentDay = today.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+      let daysUntilTuesday = 2 - currentDay; // Tuesday is day 2
+      
+      // If Tuesday has already passed this week, move to next Tuesday
+      if (daysUntilTuesday <= 0) {
+        daysUntilTuesday += 7;
+      }
+      
+      expiryDate = new Date(today);
+      expiryDate.setDate(today.getDate() + daysUntilTuesday);
+      expiryDescription = 'next Tuesday (weekly)';
+      
+    } else if (indexName === 'BANKNIFTY') {
+      // BANKNIFTY: Monthly expiry on LAST WORKING DAY of the month
+      const currentMonth = today.getMonth();
+      const currentYear = today.getFullYear();
+      
+      // NSE holidays for 2024-2025 (major ones)
+      const nseHolidays = [
+        '2024-10-02', // Gandhi Jayanti
+        '2024-10-31', // Diwali
+        '2024-11-01', // Diwali
+        '2024-11-15', // Guru Nanak Jayanti
+        '2024-12-25', // Christmas
+        '2025-01-26', // Republic Day
+        '2025-03-14', // Holi
+        '2025-04-14', // Dr. Ambedkar Jayanti
+        '2025-04-18', // Good Friday
+        '2025-08-15', // Independence Day
+        '2025-10-02', // Gandhi Jayanti
+        '2025-10-20', // Dussehra
+        '2025-11-07', // Diwali
+        '2025-12-25', // Christmas
+      ];
+      
+      const isNSEHoliday = (date: Date): boolean => {
+        const dateStr = date.toISOString().split('T')[0];
+        return nseHolidays.includes(dateStr);
+      };
+      
+      const isWorkingDay = (date: Date): boolean => {
+        const day = date.getDay();
+        // Monday = 1, ..., Friday = 5 (working days)
+        return day >= 1 && day <= 5 && !isNSEHoliday(date);
+      };
+      
+      // Find the last working day of the current month
+      const lastDayOfMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+      let lastWorkingDay = null;
+      
+      // Start from the last day and work backwards to find the last working day
+      for (let day = lastDayOfMonth; day >= 1; day--) {
+        const testDate = new Date(currentYear, currentMonth, day);
+        if (isWorkingDay(testDate)) {
+          lastWorkingDay = day;
+          break;
+        }
+      }
+      
+      if (lastWorkingDay) {
+        const currentMonthLastWorkingDay = new Date(currentYear, currentMonth, lastWorkingDay);
+        
+        // If today is before or on the last working day of current month, use it
+        if (today <= currentMonthLastWorkingDay) {
+          expiryDate = currentMonthLastWorkingDay;
+          expiryDescription = `last working day of ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][currentMonth]}`;
+        } else {
+          // Otherwise, use last working day of next month
+          const nextMonth = currentMonth + 1;
+          const nextYear = nextMonth > 11 ? currentYear + 1 : currentYear;
+          const nextMonthIndex = nextMonth > 11 ? 0 : nextMonth;
+          
+          const lastDayOfNextMonth = new Date(nextYear, nextMonthIndex + 1, 0).getDate();
+          let nextMonthLastWorkingDay = null;
+          
+          for (let day = lastDayOfNextMonth; day >= 1; day--) {
+            const testDate = new Date(nextYear, nextMonthIndex, day);
+            if (isWorkingDay(testDate)) {
+              nextMonthLastWorkingDay = day;
+              break;
+            }
+          }
+          
+          expiryDate = new Date(nextYear, nextMonthIndex, nextMonthLastWorkingDay!);
+          expiryDescription = `last working day of ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][nextMonthIndex]}`;
+        }
+      } else {
+        // Fallback if calculation fails
+        expiryDate = new Date(currentYear, currentMonth, lastDayOfMonth);
+        expiryDescription = 'fallback (last day of month)';
+      }
+      
+    } else {
+      // Default: Weekly Thursday expiry for other indices
+      const currentDay = today.getDay();
+      let daysUntilThursday = 4 - currentDay;
+      
+      if (daysUntilThursday <= 0) {
+        daysUntilThursday += 7;
+      }
+      
+      expiryDate = new Date(today);
+      expiryDate.setDate(today.getDate() + daysUntilThursday);
+      expiryDescription = 'next Thursday (weekly)';
     }
-    
-    const expiryDate = new Date(today);
-    expiryDate.setDate(today.getDate() + daysUntilExpiry);
     
     // Format as DDMMMYY (e.g., 14NOV24)
     const day = String(expiryDate.getDate()).padStart(2, '0');
@@ -1981,37 +2095,85 @@ ${Object.keys(healthStatus).length === 0 ? '✅ All systems operational' :
     const month = monthNames[expiryDate.getMonth()];
     const year = String(expiryDate.getFullYear()).slice(-2);
     
-    return `${day}${month}${year}`;
+    const expiryString = `${day}${month}${year}`;
+    logger.debug(`📅 Expiry for ${indexName}: ${expiryString} (${expiryDescription})`);
+    
+    return expiryString;
   }
 
   private extractStrikeFromSymbol(optionSymbol: string, indexName: string): number {
-    // Extract strike price from option symbol
-    // Example: "NIFTY2411425300CE" -> 25300
-    // Example: "BANKNIFTY2411453000PE" -> 53000
+    // Extract strike price from option symbol with index-specific logic
+    // NIFTY: "NIFTY2411425300CE" -> 25300 (5 digits)
+    // BANKNIFTY: "BANKNIFTY2411453000PE" -> 53000 (6 digits typically)
     
     try {
+      logger.debug(`🔍 Extracting strike from: ${optionSymbol} (${indexName})`);
+      
       // Remove the index name prefix and CE/PE suffix
       let numericPart = optionSymbol.replace(indexName, '');
       numericPart = numericPart.replace(/CE$|PE$/i, '');
       
-      // The last 5-6 digits are typically the strike price
-      const match = numericPart.match(/(\d{5,6})$/);
-      if (match) {
-        return parseInt(match[1]);
+      logger.debug(`   After cleanup: ${numericPart}`);
+      
+      // Different patterns for different indices
+      if (indexName === 'BANKNIFTY') {
+        // BANKNIFTY typically has 5-6 digit strikes (50000-60000 range)
+        const match = numericPart.match(/(\d{5,6})$/);
+        if (match) {
+          const strike = parseInt(match[1]);
+          logger.debug(`   BANKNIFTY strike extracted: ${strike}`);
+          return strike;
+        }
+        
+        // Fallback: Look for numbers in 40000-70000 range (typical BANKNIFTY strikes)
+        const allNumbers = optionSymbol.match(/\d+/g);
+        if (allNumbers) {
+          const bankNiftyStrike = allNumbers
+            .map(n => parseInt(n))
+            .find(num => num >= 40000 && num <= 70000);
+          
+          if (bankNiftyStrike) {
+            logger.debug(`   BANKNIFTY strike found by range: ${bankNiftyStrike}`);
+            return bankNiftyStrike;
+          }
+        }
+        
+      } else if (indexName === 'NIFTY') {
+        // NIFTY typically has 5 digit strikes (20000-30000 range)
+        const match = numericPart.match(/(\d{5})$/);
+        if (match) {
+          const strike = parseInt(match[1]);
+          logger.debug(`   NIFTY strike extracted: ${strike}`);
+          return strike;
+        }
+        
+        // Fallback: Look for numbers in 20000-30000 range (typical NIFTY strikes)
+        const allNumbers = optionSymbol.match(/\d+/g);
+        if (allNumbers) {
+          const niftyStrike = allNumbers
+            .map(n => parseInt(n))
+            .find(num => num >= 20000 && num <= 35000);
+          
+          if (niftyStrike) {
+            logger.debug(`   NIFTY strike found by range: ${niftyStrike}`);
+            return niftyStrike;
+          }
+        }
       }
       
-      // Fallback: extract any number from the symbol
+      // Final fallback: extract the largest number
       const allNumbers = optionSymbol.match(/\d+/g);
       if (allNumbers && allNumbers.length > 0) {
-        // Usually the largest number is the strike price
         const numbers = allNumbers.map(n => parseInt(n));
-        return Math.max(...numbers);
+        const maxNumber = Math.max(...numbers);
+        logger.warn(`   Fallback strike extraction: ${maxNumber}`);
+        return maxNumber;
       }
       
-      logger.error(`Could not extract strike from symbol: ${optionSymbol}`);
+      logger.error(`❌ Could not extract strike from symbol: ${optionSymbol}`);
       return 0;
     } catch (error) {
-      logger.error(`Strike extraction failed for ${optionSymbol}:`, (error as Error).message);
+      logger.error(`❌ Strike extraction failed for ${optionSymbol}:`, (error as Error).message);
       return 0;
     }
   }
