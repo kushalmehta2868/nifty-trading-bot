@@ -352,6 +352,7 @@ class OrderService {
   private peakPnL = 0;
   private monitoringInterval: NodeJS.Timeout | null = null;
   private tradingSignalHandler?: (signal: TradingSignal) => Promise<void>;
+  private lastSignalTime: Map<string, number> = new Map(); // Track last signal time per index
   private riskManager = new AdvancedRiskManager();
   private performanceTracker = new PerformanceTracker();
   private errorRecoveryManager = new ErrorRecoveryManager();
@@ -376,6 +377,26 @@ class OrderService {
   private async processSignal(signal: TradingSignal): Promise<void> {
     try {
       logger.info(`🎯 SIGNAL RECEIVED: ${signal.indexName} ${signal.optionType} | Confidence: ${signal.confidence.toFixed(1)}% | Strategy: ${this.getStrategyName(signal.confidence)}`);
+      
+      // ✅ CHECK SIGNAL COOLDOWN PERIOD (prevent rapid-fire trades on same index)
+      const now = Date.now();
+      const lastSignalTime = this.lastSignalTime.get(signal.indexName);
+      const cooldownMs = config.trading.signalCooldown;
+      
+      if (lastSignalTime && (now - lastSignalTime) < cooldownMs) {
+        const remainingCooldown = Math.ceil((cooldownMs - (now - lastSignalTime)) / 1000);
+        logger.warn(`❄️ SIGNAL COOLDOWN ACTIVE: ${signal.indexName} signal blocked`);
+        logger.warn(`   Last signal: ${Math.floor((now - lastSignalTime) / 1000)}s ago`);
+        logger.warn(`   Cooldown remaining: ${remainingCooldown}s (${cooldownMs/1000}s total)`);
+        logger.warn(`   Reason: Prevents rapid-fire trades on same index`);
+        
+        (process as any).emit('signalCooledDown', { 
+          signal, 
+          remainingCooldown,
+          message: `🧊 Signal cooldown active for ${signal.indexName} - ${remainingCooldown}s remaining`
+        });
+        return;
+      }
       
       // Enhanced risk checks
       const riskAssessment = await this.riskManager.assessOrderRisk(signal, this.dailyPnL, this.activeOrders.length);
@@ -486,6 +507,11 @@ class OrderService {
         }, 100);
         
         (process as any).emit('orderPlaced', { signal, orderId: paperOrderId, isPaperTrade: true });
+        
+        // ✅ UPDATE SIGNAL TIMESTAMP for paper trade - Start cooldown period
+        this.lastSignalTime.set(signal.indexName, Date.now());
+        logger.info(`⏱️ PAPER TRADE COOLDOWN STARTED: ${signal.indexName} cooldown period activated (${config.trading.signalCooldown/1000}s)`);
+        
       } else {
         // Real Trading: Same calculations, with actual money execution
         logger.info('🎯 REAL ORDER: Executing with live money...');
@@ -2073,10 +2099,12 @@ ${Object.keys(healthStatus).length === 0 ? '✅ All systems operational' :
     logger.info(`🔍 FORCE EXIT CHECK COMPLETE: ${this.activeOrders.length} positions remaining`);
   }
 
+
   public resetDailyStats(): void {
     this.dailyTrades = 0;
     this.dailyPnL = 0;
     this.activeOrders = [];
+    this.lastSignalTime.clear(); // Clear cooldown tracking on reset
     logger.info('📊 Daily stats reset - ready for new trading session');
   }
 
