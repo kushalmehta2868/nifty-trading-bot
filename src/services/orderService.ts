@@ -859,7 +859,13 @@ class OrderService {
     this.monitoringInterval = setInterval(async () => {
       cycleCount++;
       
+      // ✅ CRITICAL FIX: Force aggressive exit checks more frequently
       await this.checkOrderStatus();
+      
+      // ✅ Additional forced exit check every 5 cycles (10 seconds) for better SL detection
+      if (cycleCount % 5 === 0) {
+        await this.forceExitCheck();
+      }
       
       // Run stale order cleanup every 45 cycles (90 seconds)
       if (cycleCount % 45 === 0) {
@@ -870,9 +876,9 @@ class OrderService {
       if (cycleCount % 30 === 0) {
         this.logActiveOrdersStatus();
       }
-    }, 2000);
+    }, 1500); // ✅ Reduced from 2000ms to 1500ms for faster detection
 
-    logger.info('🔍 Order monitoring started - checking every 2s, logging every 60s, cleanup every 90s');
+    logger.info('🔍 Order monitoring started - checking every 1.5s with force exit check every 7.5s for aggressive SL detection');
   }
 
   private async checkOrderStatus(): Promise<void> {
@@ -1614,22 +1620,44 @@ ${Object.keys(healthStatus).length === 0 ? '✅ All systems operational' :
       logger.info(`   Stop Loss:     ₹${stopLoss} ${currentPrice <= stopLoss ? '✅ HIT' : '❌ NOT HIT'}`);
       logger.info(`   Entry Price:   ₹${entryPrice}`);
 
-      // ✅ SIMPLIFIED EXIT LOGIC - Remove complex validation that might block exits
+      // ✅ AGGRESSIVE EXIT LOGIC for both TARGET and SL
       if (currentPrice >= target) {
-        // TARGET HIT
+        // TARGET HIT - AGGRESSIVE EXIT WITH REALISTIC PRICING
         shouldExit = true;
-        exitPrice = target; // Exit exactly at target for paper trading
+        
+        // ✅ CRITICAL FIX: Use current price for paper trading instead of exact target
+        // This accounts for price movements beyond target
+        exitPrice = currentPrice; // Exit at current market price for realistic simulation
         exitReason = 'TARGET';
-        logger.warn(`🎯 TARGET HIT! ${activeOrder.signal.optionSymbol} - Current ₹${currentPrice} >= Target ₹${target}`);
-        logger.warn(`🏆 PROFIT EXIT: Will exit at ₹${exitPrice}`);
+        
+        logger.error(`🚨 TARGET ACHIEVED! ${activeOrder.signal.optionSymbol}`);
+        logger.error(`   Current Price: ₹${currentPrice}`);
+        logger.error(`   Target Set: ₹${target}`);
+        logger.error(`   IMMEDIATE EXIT at ₹${exitPrice} (market price)`);
+        
+        // Additional logging for debugging target profits
+        const targetExcessAmount = currentPrice - target;
+        const targetExcessPercent = (targetExcessAmount / target * 100).toFixed(2);
+        logger.error(`   Target Excess: +₹${targetExcessAmount.toFixed(2)} (+${targetExcessPercent}% above target)`);
         
       } else if (currentPrice <= stopLoss) {
-        // STOP LOSS HIT
+        // STOP LOSS HIT - AGGRESSIVE EXIT WITH BUFFER
         shouldExit = true;
-        exitPrice = stopLoss; // Exit exactly at stop loss for paper trading
+        
+        // ✅ CRITICAL FIX: Use current price for paper trading instead of exact SL
+        // This accounts for price gaps and slippage
+        exitPrice = currentPrice; // Exit at current market price for realistic simulation
         exitReason = 'STOPLOSS';
-        logger.warn(`🛑 STOP LOSS HIT! ${activeOrder.signal.optionSymbol} - Current ₹${currentPrice} <= SL ₹${stopLoss}`);
-        logger.warn(`💸 LOSS PROTECTION: Will exit at ₹${exitPrice}`);
+        
+        logger.error(`🚨 STOP LOSS TRIGGERED! ${activeOrder.signal.optionSymbol}`);
+        logger.error(`   Current Price: ₹${currentPrice}`);
+        logger.error(`   Stop Loss Set: ₹${stopLoss}`);
+        logger.error(`   IMMEDIATE EXIT at ₹${exitPrice} (market price)`);
+        
+        // Additional logging for debugging SL failures
+        const slBreachAmount = stopLoss - currentPrice;
+        const slBreachPercent = (slBreachAmount / stopLoss * 100).toFixed(2);
+        logger.error(`   SL Breach: -₹${slBreachAmount.toFixed(2)} (-${slBreachPercent}% below SL)`);
         
       } else {
         // NO EXIT CONDITIONS MET
@@ -1640,8 +1668,26 @@ ${Object.keys(healthStatus).length === 0 ? '✅ All systems operational' :
         
         logger.debug(`⏳ NO EXIT: Holding position - Duration: ${durationHours.toFixed(1)}h | Target distance: +${targetDistance}% | SL distance: -${slDistance}%`);
         
+        // ✅ IMPROVED: Check if we're close to target/SL and force exit with buffer
+        const targetGap = ((target - currentPrice) / target * 100);
+        const slGap = ((currentPrice - stopLoss) / stopLoss * 100);
+        
+        // If within 3% of target, exit early to capture profits
+        if (targetGap <= 3 && targetGap > 0) {
+          shouldExit = true;
+          exitPrice = currentPrice;
+          exitReason = 'TARGET';
+          logger.warn(`🎯 NEAR TARGET EXIT: ${activeOrder.signal.optionSymbol} within 3% of target - Force exit at ₹${exitPrice}`);
+          
+        // If within 3% of SL, exit early to limit losses  
+        } else if (slGap <= 3 && slGap > 0) {
+          shouldExit = true;
+          exitPrice = currentPrice;
+          exitReason = 'STOPLOSS';
+          logger.warn(`🛑 NEAR SL EXIT: ${activeOrder.signal.optionSymbol} within 3% of SL - Force exit at ₹${exitPrice}`);
+          
         // Emergency timeout exit after 6 hours (market close protection)
-        if (durationHours > 6) {
+        } else if (durationHours > 6) {
           shouldExit = true;
           exitPrice = Math.max(currentPrice * 0.95, stopLoss); // 5% slippage for emergency exit
           exitReason = 'STOPLOSS';
@@ -2245,6 +2291,109 @@ ${pnlColor} P&L: ₹${pnl.toFixed(2)}
       logger.warn(`   Force removing: ${order.orderId} (${order.signal.indexName}_${order.signal.optionType}) - Status: ${order.status}`);
       (process as any).emit('orderExited', { order: { signal: order.signal }, message: 'Force cleanup' });
     });
+  }
+
+  // ✅ NEW METHOD: Force aggressive exit checking for SL failures
+  private async forceExitCheck(): Promise<void> {
+    if (this.activeOrders.length === 0) return;
+
+    logger.debug('🚨 FORCE EXIT CHECK: Scanning all active orders for missed SL/Target hits');
+
+    for (const activeOrder of this.activeOrders) {
+      if (!activeOrder || activeOrder.status !== 'FILLED' || activeOrder.exitPrice) {
+        continue; // Skip non-active orders
+      }
+
+      try {
+        // ✅ AGGRESSIVE PRICE FETCH - Multiple fallback methods
+        let currentPrice = 0;
+
+        // Method 1: Direct API call
+        try {
+          const price = await angelAPI.getOptionPrice(activeOrder.signal.optionSymbol, '');
+          if (price && price > 0) currentPrice = price;
+        } catch (error) {
+          logger.debug(`Force exit API call failed for ${activeOrder.signal.optionSymbol}`);
+        }
+
+        // Method 2: Alternative price estimation if API fails
+        if (!currentPrice || currentPrice <= 0) {
+          const entryPrice = activeOrder.entryPrice || activeOrder.signal.entryPrice;
+          const timeHeld = (Date.now() - (activeOrder.entryTime?.getTime() || activeOrder.timestamp.getTime())) / (1000 * 60 * 60);
+          
+          // Estimate based on time decay (conservative approach)
+          currentPrice = entryPrice * Math.max(0.5, 1 - (timeHeld * 0.08)); // 8% decay per hour
+          logger.warn(`🔄 FORCE EXIT using estimated price: ${activeOrder.signal.optionSymbol} = ₹${currentPrice} (${timeHeld.toFixed(1)}h decay)`);
+        }
+
+        if (!currentPrice || currentPrice <= 0) {
+          logger.error(`❌ FORCE EXIT FAILED: Could not determine price for ${activeOrder.signal.optionSymbol}`);
+          continue;
+        }
+
+        const target = activeOrder.signal.target;
+        const stopLoss = activeOrder.signal.stopLoss;
+        
+        logger.warn(`🔍 FORCE EXIT SCAN: ${activeOrder.signal.optionSymbol} = ₹${currentPrice} | Target: ₹${target} | SL: ₹${stopLoss}`);
+
+        // ✅ AGGRESSIVE TARGET & SL CHECK - Use buffers for missed exits
+        const slBuffer = stopLoss * 0.95; // 5% buffer below SL
+        const targetBuffer = target * 0.98; // 2% buffer below target for early capture
+        
+        if (currentPrice >= targetBuffer) {
+          logger.error(`🚨 FORCE EXIT - TARGET REACHED: ${activeOrder.signal.optionSymbol} at ₹${currentPrice} (Target: ₹${target}, Buffer: ₹${targetBuffer})`);
+          await this.executeExit(activeOrder, currentPrice, 'TARGET');
+          
+        } else if (currentPrice <= slBuffer) {
+          logger.error(`🚨 FORCE EXIT - STOP LOSS MISSED: ${activeOrder.signal.optionSymbol} at ₹${currentPrice} (SL: ₹${stopLoss}, Buffer: ₹${slBuffer})`);
+          await this.executeExit(activeOrder, currentPrice, 'STOPLOSS');
+        }
+
+      } catch (error) {
+        logger.error(`Force exit check failed for ${activeOrder.signal.optionSymbol}:`, (error as Error).message);
+      }
+    }
+  }
+
+  // ✅ DEDICATED EXIT EXECUTION METHOD to avoid code duplication
+  private async executeExit(activeOrder: ActiveOrder, exitPrice: number, reason: 'TARGET' | 'STOPLOSS'): Promise<void> {
+    try {
+      const entryPrice = activeOrder.entryPrice || activeOrder.signal.entryPrice;
+      const pnl = (exitPrice - entryPrice) * config.indices[activeOrder.signal.indexName].lotSize;
+      const exitTime = new Date();
+
+      // ✅ ATOMIC UPDATE
+      activeOrder.status = reason === 'TARGET' ? 'EXITED_TARGET' : 'EXITED_SL';
+      activeOrder.exitPrice = exitPrice;
+      activeOrder.exitTime = exitTime;
+      activeOrder.exitReason = reason;
+      activeOrder.pnl = pnl;
+
+      // Update daily stats
+      this.dailyPnL += pnl;
+      this.dailyTrades++;
+
+      logger.error(`🚀 EXIT EXECUTED: ${activeOrder.signal.optionSymbol}`);
+      logger.error(`   Reason: ${reason}`);
+      logger.error(`   Entry: ₹${entryPrice} | Exit: ₹${exitPrice}`);
+      logger.error(`   P&L: ₹${pnl.toFixed(2)}`);
+
+      // Send exit notification
+      await this.sendExitNotification(activeOrder);
+
+      // Remove from active tracking
+      this.removeOrderFromActiveList(activeOrder.orderId, `FORCE_EXIT_${reason}`);
+
+      // Emit exit event
+      (process as any).emit('orderExited', {
+        order: activeOrder,
+        message: `🚀 *EXIT EXECUTED*\n📈 ${activeOrder.signal.optionSymbol}\n💰 ${reason}: ₹${exitPrice}\n📊 P&L: ₹${pnl.toFixed(2)}`,
+        pnl: pnl
+      });
+
+    } catch (error) {
+      logger.error(`Exit execution failed for ${activeOrder.signal.optionSymbol}:`, (error as Error).message);
+    }
   }
 
   // 🆕 DIAGNOSTIC METHOD: Force check all active positions for exit conditions
