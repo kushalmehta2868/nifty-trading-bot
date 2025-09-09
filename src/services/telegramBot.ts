@@ -157,19 +157,25 @@ class TelegramBotService {
     // Determine strategy icon based on confidence
     const strategyIcon = signal.confidence >= 90 ? '🏆' : signal.confidence >= 80 ? '🎯' : '🚀';
 
-    // Calculate profit/loss potential
-    const profitPotential = ((signal.target - signal.entryPrice) / signal.entryPrice) * 100;
-    const riskAmount = ((signal.entryPrice - signal.stopLoss) / signal.entryPrice) * 100;
-    const riskReward = profitPotential / riskAmount;
+    // Calculate profit/loss potential - handle zero/invalid prices
+    let profitPotential = 0;
+    let riskAmount = 0;
+    let riskReward = 0;
+    
+    if (signal.entryPrice > 0 && signal.target > 0 && signal.stopLoss > 0) {
+      profitPotential = ((signal.target - signal.entryPrice) / signal.entryPrice) * 100;
+      riskAmount = Math.abs((signal.entryPrice - signal.stopLoss) / signal.entryPrice) * 100;
+      riskReward = riskAmount > 0 ? profitPotential / riskAmount : 0;
+    }
 
     return `
 ${strategyIcon} *${signal.indexName} ${signal.optionType}* ${tradingMode} ${typeEmoji}
 📈 ${signal.optionSymbol}
 🎯 Conf: ${signal.confidence.toFixed(0)}% | RR: 1:${riskReward.toFixed(2)}
 
-💰 Entry: ₹${signal.entryPrice.toFixed(2)}
-🎯 Target: ₹${signal.target.toFixed(2)} (+${profitPotential.toFixed(1)}%)
-🛑 SL: ₹${signal.stopLoss.toFixed(2)} (-${riskAmount.toFixed(1)}%)
+💰 Entry: ₹${signal.entryPrice > 0 ? signal.entryPrice.toFixed(2) : 'Pending'}
+🎯 Target: ₹${signal.target > 0 ? signal.target.toFixed(2) : 'Calculating'} ${profitPotential > 0 ? `(+${profitPotential.toFixed(1)}%)` : ''}
+🛑 SL: ₹${signal.stopLoss > 0 ? signal.stopLoss.toFixed(2) : 'Calculating'} ${riskAmount > 0 ? `(-${riskAmount.toFixed(1)}%)` : ''}
 
 📊 Spot: ₹${signal.spotPrice.toFixed(2)} | RSI: ${signal.technicals.rsi.toFixed(1)}
 ⏰ ${signal.timestamp.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false })}

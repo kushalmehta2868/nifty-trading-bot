@@ -405,9 +405,9 @@ class TradingStrategy {
         spotPrice: currentPrice,
         optionType: 'CE',
         optionSymbol: this.generateOptionSymbol(indexName, strike, 'CE'),
-        entryPrice: 0, // Will be set by real API call
-        target: 0,
-        stopLoss: 0,
+        entryPrice: estimatedPremium, // Use estimated premium initially
+        target: estimatedPremium * 1.25, // 25% profit target estimate
+        stopLoss: estimatedPremium * 0.75, // 25% stop loss estimate
         confidence: Math.min(98, baseConfidence + confluenceBonus + trendBonus),
         timestamp: new Date(),
         technicals: {
@@ -433,9 +433,9 @@ class TradingStrategy {
         spotPrice: currentPrice,
         optionType: 'PE',
         optionSymbol: this.generateOptionSymbol(indexName, strike, 'PE'),
-        entryPrice: 0, // Will be set by real API call
-        target: 0,
-        stopLoss: 0,
+        entryPrice: estimatedPremium, // Use estimated premium initially
+        target: estimatedPremium * 1.25, // 25% profit target estimate
+        stopLoss: estimatedPremium * 0.75, // 25% stop loss estimate
         confidence: Math.min(98, baseConfidence + confluenceBonus + trendBonus),
         timestamp: new Date(),
         technicals: {
@@ -851,17 +851,31 @@ class TradingStrategy {
 
       return `${day}${month}${year}`;
     } else {
-      // NIFTY: Weekly expiry on Tuesday (changed from Thursday since Sept 1, 2025)
-      const nextTuesday = new Date(today);
-      const daysUntilTuesday = (2 - today.getDay() + 7) % 7; // 2 = Tuesday
-      const adjustedDays = daysUntilTuesday === 0 ? 7 : daysUntilTuesday;
-      nextTuesday.setDate(today.getDate() + adjustedDays);
+      // NIFTY: Weekly expiry on Tuesday 
+      // ✅ CRITICAL FIX: Use CURRENT week expiry, not next week
+      const currentTuesday = new Date(today);
+      const todayDay = today.getDay(); // 0=Sunday, 1=Monday, 2=Tuesday, etc.
+      
+      if (todayDay === 2) {
+        // Today is Tuesday - use TODAY's expiry
+        // No adjustment needed, currentTuesday is already today
+      } else if (todayDay < 2) {
+        // Today is Sunday(0) or Monday(1) - use THIS week's Tuesday
+        const daysUntilTuesday = 2 - todayDay;
+        currentTuesday.setDate(today.getDate() + daysUntilTuesday);
+      } else {
+        // Today is Wed(3), Thu(4), Fri(5), Sat(6) - use NEXT week's Tuesday  
+        const daysUntilNextTuesday = 7 - (todayDay - 2);
+        currentTuesday.setDate(today.getDate() + daysUntilNextTuesday);
+      }
 
-      const day = nextTuesday.getDate().toString().padStart(2, '0');
+      const day = currentTuesday.getDate().toString().padStart(2, '0');
       const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-      const month = months[nextTuesday.getMonth()];
-      const year = nextTuesday.getFullYear().toString().slice(-2);
+      const month = months[currentTuesday.getMonth()];
+      const year = currentTuesday.getFullYear().toString().slice(-2);
 
+      logger.debug(`🗓️ NIFTY expiry calculation: Today=${today.toDateString()}, Expiry=${currentTuesday.toDateString()}, Format=${day}${month}${year}`);
+      
       return `${day}${month}${year}`;
     }
   }

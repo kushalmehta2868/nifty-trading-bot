@@ -434,13 +434,30 @@ class AngelAPI {
   ): Promise<number | null> {
     try {
       const response = await this.getQuote('NFO', tradingSymbol, symbolToken);
-      logger.debug("Quote response:", response);
-      if (response && response.ltp) {
-        return parseFloat(response.ltp);
+      logger.debug("Quote response for price extraction:", response);
+      
+      // ✅ CRITICAL FIX: Multiple fallbacks for price extraction
+      let price = 0;
+      if (response) {
+        price = parseFloat(
+          response.ltp || 
+          response.close || 
+          response.last_price || 
+          response.lasttradedprice || 
+          0
+        );
       }
 
-      logger.warn(`Could not fetch option price for ${tradingSymbol}`);
+      if (price > 0) {
+        logger.info(`✅ Option price extracted: ${tradingSymbol} = ₹${price.toFixed(2)}`);
+        return price;
+      }
+
+      // Enhanced error logging
+      logger.error(`❌ Could not extract valid price for ${tradingSymbol}`);
+      logger.error(`Available fields in response:`, Object.keys(response || {}));
       return null;
+      
     } catch (error) {
       logger.error(`Failed to get option price for ${tradingSymbol}:`, (error as Error).message);
       return null;
@@ -994,16 +1011,22 @@ class AngelAPI {
       );
 
       // Log the response for debugging
-      logger.info(`Quote API response for ${tradingSymbol}:`, response);
+      logger.debug(`Quote API response for ${tradingSymbol}:`, response);
 
       // Check if data was successfully fetched
       if (response?.status === true && response?.data?.fetched?.length > 0) {
         const marketData = response.data.fetched[0];
-        logger.info(`✅ Quote data received for ${tradingSymbol}:`, {
-          ltp: marketData.ltp,
-          token: symbolToken
-        });
-        return marketData;
+        
+        // ✅ CRITICAL FIX: Ensure LTP is extracted correctly
+        const ltp = parseFloat(marketData.ltp || marketData.close || marketData.last_price || 0);
+        
+        logger.info(`✅ Quote data received for ${tradingSymbol}: LTP=₹${ltp} (Token: ${symbolToken})`);
+        
+        // Return the market data with confirmed LTP
+        return {
+          ...marketData,
+          ltp: ltp
+        };
       }
 
       // Check for unfetched tokens with errors
