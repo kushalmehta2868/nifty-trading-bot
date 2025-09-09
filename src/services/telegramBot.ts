@@ -90,6 +90,19 @@ class TelegramBotService {
     // (process as any).on('systemHealth', systemHealthHandler);
     // this.eventListeners.push({ event: 'systemHealth', handler: systemHealthHandler });
 
+    // Listen for daily cleanup events
+    const cleanupCompletedHandler = async (data: { filesProcessed: number, errors: number, timestamp: Date }) => {
+      await this.sendCleanupCompleted(data.filesProcessed, data.errors);
+    };
+    (process as any).on('dailyCleanupCompleted', cleanupCompletedHandler);
+    this.eventListeners.push({ event: 'dailyCleanupCompleted', handler: cleanupCompletedHandler });
+
+    const cleanupFailedHandler = async (data: { error: string, timestamp: Date }) => {
+      await this.sendCleanupFailed(data.error);
+    };
+    (process as any).on('dailyCleanupFailed', cleanupFailedHandler);
+    this.eventListeners.push({ event: 'dailyCleanupFailed', handler: cleanupFailedHandler });
+
     // WebSocket status events disabled - user preference
     // const websocketStatusHandler = async (data: { status: string, message: string }) => {
     //   logger.info(`🔗 WebSocket status change: ${data.status}`);
@@ -404,6 +417,40 @@ ${status === 'connected' ? '✅ Live data streaming resumed' : '⚠️ Switching
       this.lastResetDate = currentDate;
       logger.info('📊 Daily counters reset for new trading day');
     }
+  }
+
+  // Daily cleanup notification handlers
+  private async sendCleanupCompleted(filesProcessed: number, errors: number): Promise<void> {
+    const message = `
+🧹 *Daily Cleanup Completed*
+
+✅ *Fresh Start Ready*
+*Files Processed:* ${filesProcessed}
+*Errors:* ${errors}
+*Time:* ${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}
+
+🚀 *System Status:* Clean slate for new trading day!
+📊 *Memory:* ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB heap usage
+🗓️ *Next Cleanup:* Tomorrow 5:30 AM IST
+    `.trim();
+
+    await this.sendMessage(message);
+    logger.info('🧹 Daily cleanup completion notification sent');
+  }
+
+  private async sendCleanupFailed(error: string): Promise<void> {
+    const message = `
+🚨 *Daily Cleanup Failed*
+
+❌ *Issue Detected:* ${error}
+*Time:* ${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}
+
+⚠️ *Manual cleanup may be required*
+🔧 *Check logs for details*
+    `.trim();
+
+    await this.sendMessage(message);
+    logger.warn('🚨 Daily cleanup failure notification sent');
   }
 
   public cleanup(): void {

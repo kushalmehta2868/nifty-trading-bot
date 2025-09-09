@@ -5,6 +5,7 @@ import { orderService } from './services/orderService';
 import { healthServer } from './services/healthServer';
 import { healthMonitor } from './services/healthMonitor';
 import { logger } from './utils/logger';
+import { dailyCleanup } from './utils/dailyCleanup';
 import { isMarketOpen, getTimeUntilMarketOpen, formatTimeUntilMarketOpen, getMarketStatus } from './utils/marketHours';
 import { TradingStats } from './types';
 
@@ -26,6 +27,9 @@ class WebSocketTradingBot {
 
       // Start health server first
       healthServer.start();
+
+      // Initialize daily cleanup manager
+      dailyCleanup.initialize();
 
       // Check market hours
       if (!isMarketOpen()) {
@@ -163,6 +167,7 @@ class WebSocketTradingBot {
     webSocketFeed.disconnect();
     orderService.stopMonitoring();
     healthServer.stop();
+    dailyCleanup.stop();
 
     const uptime = Math.floor((Date.now() - this.startTime) / 1000);
     logger.info(`Bot ran for ${uptime} seconds`);

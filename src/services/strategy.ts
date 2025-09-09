@@ -1587,6 +1587,26 @@ class TradingStrategy {
     this.logActivePositionsStatus('MANUAL_CHECK');
   }
 
+  // Clear all in-memory data for fresh daily start
+  public performDailyReset(): void {
+    logger.info('🔄 Performing daily strategy reset...');
+    
+    // Clear price buffers for fresh start
+    this.priceBuffers.NIFTY = [];
+    this.priceBuffers.BANKNIFTY = [];
+    
+    // Clear signal tracking (keep cooldowns active to prevent immediate signals)
+    // this.lastSignalTime = {}; // Don't clear to prevent rapid signals on startup
+    
+    // Reset position tracking
+    Object.keys(this.activePositions).forEach(key => {
+      this.activePositions[key] = false;
+    });
+    
+    logger.info('✅ Daily strategy reset completed - fresh buffers and unlocked positions');
+    this.logActivePositionsStatus('DAILY_RESET');
+  }
+
   public stop(): void {
     // Clean up event listeners
     this.eventHandlers.forEach((handler, event) => {
