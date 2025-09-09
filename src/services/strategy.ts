@@ -60,8 +60,14 @@ class TradingStrategy {
     const orderExitedHandler = (data: any) => {
       const indexName = data.order.signal.indexName;
       this.activePositions[indexName] = false;
-      logger.info(`🔓 POSITION UNLOCKED: ${indexName} - allowing new signals`);
-      this.logActivePositionsStatus('ORDER_EXITED');
+      
+      // ✅ CRITICAL FIX: Reset cooldown timer when order exits to enforce fresh cooldown period
+      const signalKey = indexName;
+      this.lastSignalTime[signalKey] = Date.now();
+      
+      const cooldownMinutes = Math.ceil(config.trading.signalCooldown / (1000 * 60));
+      logger.info(`🔓 POSITION UNLOCKED: ${indexName} - NEW ${cooldownMinutes}min cooldown started after exit`);
+      this.logActivePositionsStatus('ORDER_EXITED_WITH_COOLDOWN');
     };
     (process as any).on('orderExited', orderExitedHandler);
     this.eventHandlers.set('orderExited', orderExitedHandler);
@@ -70,8 +76,14 @@ class TradingStrategy {
     const orderCancelledHandler = (data: any) => {
       const indexName = data.order.signal.indexName;
       this.activePositions[indexName] = false;
-      logger.info(`🔓 POSITION UNLOCKED after cancellation: ${indexName} - allowing new signals`);
-      this.logActivePositionsStatus('ORDER_CANCELLED');
+      
+      // ✅ CRITICAL FIX: Reset cooldown timer when order cancelled to enforce fresh cooldown period
+      const signalKey = indexName;
+      this.lastSignalTime[signalKey] = Date.now();
+      
+      const cooldownMinutes = Math.ceil(config.trading.signalCooldown / (1000 * 60));
+      logger.info(`🔓 POSITION UNLOCKED after cancellation: ${indexName} - NEW ${cooldownMinutes}min cooldown started`);
+      this.logActivePositionsStatus('ORDER_CANCELLED_WITH_COOLDOWN');
     };
     (process as any).on('orderCancelled', orderCancelledHandler);
     this.eventHandlers.set('orderCancelled', orderCancelledHandler);
@@ -80,9 +92,15 @@ class TradingStrategy {
     const orderRejectedHandler = (data: any) => {
       const indexName = data.signal.indexName;
       this.activePositions[indexName] = false;
-      logger.info(`🔓 POSITION UNLOCKED after rejection: ${indexName} - allowing new signals`);
+      
+      // ✅ CRITICAL FIX: Reset cooldown timer when order rejected to enforce fresh cooldown period
+      const signalKey = indexName;
+      this.lastSignalTime[signalKey] = Date.now();
+      
+      const cooldownMinutes = Math.ceil(config.trading.signalCooldown / (1000 * 60));
+      logger.info(`🔓 POSITION UNLOCKED after rejection: ${indexName} - NEW ${cooldownMinutes}min cooldown started`);
       logger.error(`💥 Order rejected: ${data.reason}`);
-      this.logActivePositionsStatus('ORDER_REJECTED');
+      this.logActivePositionsStatus('ORDER_REJECTED_WITH_COOLDOWN');
     };
     (process as any).on('orderRejected', orderRejectedHandler);
     this.eventHandlers.set('orderRejected', orderRejectedHandler);
@@ -90,9 +108,15 @@ class TradingStrategy {
     const orderFailedHandler = (data: any) => {
       const indexName = data.signal.indexName;
       this.activePositions[indexName] = false;
-      logger.info(`🔓 POSITION UNLOCKED after failure: ${indexName} - allowing new signals`);
+      
+      // ✅ CRITICAL FIX: Reset cooldown timer when order failed to enforce fresh cooldown period
+      const signalKey = indexName;
+      this.lastSignalTime[signalKey] = Date.now();
+      
+      const cooldownMinutes = Math.ceil(config.trading.signalCooldown / (1000 * 60));
+      logger.info(`🔓 POSITION UNLOCKED after failure: ${indexName} - NEW ${cooldownMinutes}min cooldown started`);
       logger.error(`💥 Order failed: ${data.reason}`);
-      this.logActivePositionsStatus('ORDER_FAILED');
+      this.logActivePositionsStatus('ORDER_FAILED_WITH_COOLDOWN');
     };
     (process as any).on('orderFailed', orderFailedHandler);
     this.eventHandlers.set('orderFailed', orderFailedHandler);
@@ -100,9 +124,15 @@ class TradingStrategy {
     const signalExecutionFailedHandler = (data: any) => {
       const indexName = data.signal.indexName;
       this.activePositions[indexName] = false;
-      logger.info(`🔓 POSITION UNLOCKED after signal execution failure: ${indexName} - allowing new signals`);
+      
+      // ✅ CRITICAL FIX: Reset cooldown timer when signal execution fails to enforce fresh cooldown period
+      const signalKey = indexName;
+      this.lastSignalTime[signalKey] = Date.now();
+      
+      const cooldownMinutes = Math.ceil(config.trading.signalCooldown / (1000 * 60));
+      logger.info(`🔓 POSITION UNLOCKED after signal execution failure: ${indexName} - NEW ${cooldownMinutes}min cooldown started`);
       logger.error(`💥 Signal execution failed: ${data.reason}`);
-      this.logActivePositionsStatus('SIGNAL_EXECUTION_FAILED');
+      this.logActivePositionsStatus('SIGNAL_EXECUTION_FAILED_WITH_COOLDOWN');
     };
     (process as any).on('signalExecutionFailed', signalExecutionFailedHandler);
     this.eventHandlers.set('signalExecutionFailed', signalExecutionFailedHandler);
@@ -212,7 +242,9 @@ class TradingStrategy {
       // Check 2: Recent signal cooldown (prevents rapid-fire signals)
       if (this.isSignalInCooldown(signalKey)) {
         const cooldownRemaining = Math.ceil((config.trading.signalCooldown - (Date.now() - (this.lastSignalTime[signalKey] || 0))) / 1000);
-        logger.info(`⏳ ${indexName} - Signal cooldown active, ${cooldownRemaining}s remaining`);
+        const cooldownMinutes = Math.floor(cooldownRemaining / 60);
+        const cooldownSeconds = cooldownRemaining % 60;
+        logger.info(`⏳ ${indexName} - Signal cooldown ACTIVE: ${cooldownMinutes}m ${cooldownSeconds}s remaining (${cooldownRemaining}s total)`);
         return;
       }
 
@@ -789,8 +821,8 @@ class TradingStrategy {
     const today = new Date();
 
     if (indexName === 'BANKNIFTY') {
-      // BANKNIFTY: Monthly expiry only (no weekly since Nov 2024)
-      // Expiry: Last day of the month
+      // BANKNIFTY: Monthly expiry on LAST WORKING DAY of the month
+      // Must account for NSE holidays and weekends
       const currentMonth = today.getMonth();
       const currentYear = today.getFullYear();
 
@@ -804,6 +836,12 @@ class TradingStrategy {
         const adjustedMonth = nextMonth > 11 ? 0 : nextMonth;
 
         lastDayOfMonth = new Date(nextYear, adjustedMonth + 1, 0);
+      }
+
+      // ✅ CRITICAL FIX: Find the last WORKING day, not just last day
+      const { isNSETradingDay } = require('../utils/holidays');
+      while (!isNSETradingDay(lastDayOfMonth)) {
+        lastDayOfMonth.setDate(lastDayOfMonth.getDate() - 1);
       }
 
       const day = lastDayOfMonth.getDate().toString().padStart(2, '0');
@@ -1355,7 +1393,21 @@ class TradingStrategy {
 
   private isSignalInCooldown(signalKey: string): boolean {
     const lastTime = this.lastSignalTime[signalKey];
-    return lastTime ? (Date.now() - lastTime) < config.trading.signalCooldown : false;
+    if (!lastTime) return false;
+    
+    const timeSinceLastSignal = Date.now() - lastTime;
+    const isInCooldown = timeSinceLastSignal < config.trading.signalCooldown;
+    
+    // Enhanced logging for cooldown debugging
+    if (isInCooldown) {
+      const remainingMs = config.trading.signalCooldown - timeSinceLastSignal;
+      const remainingMinutes = Math.floor(remainingMs / (1000 * 60));
+      const remainingSeconds = Math.floor((remainingMs % (1000 * 60)) / 1000);
+      
+      logger.debug(`🔍 Cooldown check for ${signalKey}: ${timeSinceLastSignal}ms since last signal, need ${config.trading.signalCooldown}ms total. Remaining: ${remainingMinutes}m ${remainingSeconds}s`);
+    }
+    
+    return isInCooldown;
   }
 
 
@@ -1387,14 +1439,15 @@ class TradingStrategy {
       return isMarketOpen(); // General check
     }
 
-    // NSE trading hours: 9:30 AM to 2:45 PM (for new signals only)
+    // NSE trading hours: 9:30 AM to 3:00 PM for both NIFTY and BANKNIFTY
+    // Both indices have same trading hours on NSE
     const startTime = 930;  // 9:30 AM
-    const endTime = 1445;   // 2:45 PM (15 minutes before market close)
+    const endTime = 1500;   // 3:00 PM (full market hours)
     const isOpen = currentTime >= startTime && currentTime <= endTime;
 
     // Log NSE hours for debugging
     if (!isOpen) {
-      logger.debug(`NSE ${indexName} outside signal hours: ${currentTime} (need 930-1445)`);
+      logger.debug(`NSE ${indexName} outside signal hours: ${currentTime} (need 930-1500)`);
     }
 
     return isOpen;
@@ -1554,12 +1607,14 @@ class TradingStrategy {
   }
 
   public resetPositions(): void {
-    const lockedPositions = Object.keys(this.activePositions).filter(k => this.activePositions[k]);
+    // Ensure both NIFTY and BANKNIFTY positions are properly tracked
+    const allIndices = ['NIFTY', 'BANKNIFTY'];
+    const lockedPositions = allIndices.filter(index => this.activePositions[index] === true);
 
     if (lockedPositions.length > 0) {
       logger.warn(`🔧 Manually resetting ${lockedPositions.length} locked positions: ${lockedPositions.join(', ')}`);
 
-      lockedPositions.forEach(indexName => {
+      allIndices.forEach(indexName => {
         this.activePositions[indexName] = false;
         logger.info(`🔓 Force unlocked: ${indexName}`);
       });
@@ -1567,6 +1622,7 @@ class TradingStrategy {
       this.logActivePositionsStatus('MANUAL_RESET');
     } else {
       logger.info(`✅ No locked positions to reset`);
+      logger.info(`📊 Current status: NIFTY=${this.activePositions.NIFTY}, BANKNIFTY=${this.activePositions.BANKNIFTY}`);
       this.logActivePositionsStatus('MANUAL_RESET_NO_CHANGE');
     }
   }
@@ -1598,12 +1654,14 @@ class TradingStrategy {
     // Clear signal tracking (keep cooldowns active to prevent immediate signals)
     // this.lastSignalTime = {}; // Don't clear to prevent rapid signals on startup
     
-    // Reset position tracking
-    Object.keys(this.activePositions).forEach(key => {
-      this.activePositions[key] = false;
-    });
+    // Reset position tracking - ensure both NIFTY and BANKNIFTY are properly initialized
+    this.activePositions = {
+      'NIFTY': false,
+      'BANKNIFTY': false
+    };
     
     logger.info('✅ Daily strategy reset completed - fresh buffers and unlocked positions');
+    logger.info(`📊 Reset confirmed: NIFTY=${this.activePositions.NIFTY}, BANKNIFTY=${this.activePositions.BANKNIFTY}`);
     this.logActivePositionsStatus('DAILY_RESET');
   }
 
