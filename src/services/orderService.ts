@@ -1078,8 +1078,8 @@ class OrderService {
         logger.info(`📊 Trade Details: Entry=₹${entryPrice}, Exit=₹${exitPrice}, Qty=${config.indices[activeOrder.signal.indexName].lotSize}`);
         logger.info(`🔥 REMOVING FROM ACTIVE LIST: OrderID=${activeOrder.orderId} (current count: ${this.activeOrders.length})`);
 
-        // Send exit notification immediately
-        this.sendExitNotification(activeOrder);
+        // Send exit notification immediately with the actual exit price
+        this.sendExitNotification(activeOrder, exitPrice);
 
         // ✅ CRITICAL FIX: Remove completed order from activeOrders array
         this.removeOrderFromActiveList(activeOrder.orderId, 'REAL_EXIT_COMPLETED');
@@ -1751,8 +1751,8 @@ ${Object.keys(healthStatus).length === 0 ? '✅ All systems operational' :
         logger.info(`✅ Exit conditions confirmed: Target hit=${currentPrice >= target}, SL hit=${currentPrice <= stopLoss}`);
         logger.info(`📊 REMOVING FROM ACTIVE LIST: OrderID=${activeOrder.orderId}`);
 
-        // Send exit notification
-        this.sendExitNotification(activeOrder);
+        // Send exit notification with the actual exit price
+        this.sendExitNotification(activeOrder, exitPrice);
 
         // ✅ CRITICAL FIX: Remove completed order from activeOrders array
         logger.info(`🔥 ABOUT TO REMOVE ORDER: ${activeOrder.orderId} from active list (current count: ${this.activeOrders.length})`);
@@ -2020,22 +2020,25 @@ ${Object.keys(healthStatus).length === 0 ? '✅ All systems operational' :
     (process as any).emit('orderFilled', { order, message });
   }
 
-  private sendExitNotification(order: ActiveOrder): void {
+  private sendExitNotification(order: ActiveOrder, overrideExitPrice?: number): void {
     const isProfit = order.exitReason === 'TARGET';
     const emoji = isProfit ? '🚀' : '🛑';
     const resultText = isProfit ? 'PROFIT TARGET' : 'STOP LOSS';
     const pnlColor = isProfit ? '💰' : '💸';
     const tradeType = order.isPaperTrade ? '📄 PAPER' : '💰 REAL';
     
-    // ✅ CRITICAL FIX: Ensure accurate P&L calculation with multiple fallbacks
+    // ✅ CRITICAL FIX: Use override exit price if provided, otherwise fall back to stored value
     const entryPrice = order.entryPrice || order.signal.entryPrice;
-    let exitPrice = order.exitPrice || 0;
+    let exitPrice = overrideExitPrice || order.exitPrice || 0;
     const lotSize = config.indices[order.signal.indexName].lotSize;
     
     // Enhanced validation with detailed logging
     logger.info(`🔍 EXIT NOTIFICATION DEBUG: ${order.signal.optionSymbol}`);
     logger.info(`   Entry Price: ₹${entryPrice} (from: ${order.entryPrice ? 'order.entryPrice' : 'signal.entryPrice'})`);
-    logger.info(`   Exit Price: ₹${exitPrice} (from: order.exitPrice)`);
+    logger.info(`   Exit Price Source: ${overrideExitPrice ? 'OVERRIDE PARAMETER' : 'STORED order.exitPrice'}`);
+    logger.info(`   Override Exit Price: ${overrideExitPrice || 'N/A'}`);
+    logger.info(`   Stored order.exitPrice: ${order.exitPrice}`);
+    logger.info(`   Final Exit Price: ₹${exitPrice}`);
     logger.info(`   Exit Reason: ${order.exitReason}`);
     logger.info(`   Lot Size: ${lotSize}`);
     
@@ -2494,12 +2497,22 @@ ${pnlColor} P&L: ${pnlSign}₹${pnl.toFixed(2)}
 
       logger.error(`✅ FINAL EXIT EXECUTION: ${activeOrder.signal.optionSymbol} at ₹${exitPrice.toFixed(2)} (${reason}) | P&L: ₹${pnl.toFixed(2)}`);
 
-      // ✅ ATOMIC UPDATE
+      // ✅ ATOMIC UPDATE - Store exit price BEFORE notification
       activeOrder.status = reason === 'TARGET' ? 'EXITED_TARGET' : 'EXITED_SL';
       activeOrder.exitPrice = exitPrice;
       activeOrder.exitTime = exitTime;
       activeOrder.exitReason = reason;
       activeOrder.pnl = pnl;
+      
+      // ✅ CRITICAL DEBUG: Verify exit price is stored correctly
+      logger.error(`🔍 EXIT PRICE STORAGE VERIFICATION:`);
+      logger.error(`   Original exitPrice parameter: ₹${exitPrice}`);
+      logger.error(`   Stored activeOrder.exitPrice: ₹${activeOrder.exitPrice}`);
+      logger.error(`   Match: ${exitPrice === activeOrder.exitPrice ? '✅ YES' : '❌ NO'}`);
+      
+      if (exitPrice !== activeOrder.exitPrice) {
+        logger.error(`🚨 EXIT PRICE STORAGE FAILED! Expected: ₹${exitPrice}, Got: ₹${activeOrder.exitPrice}`);
+      }
 
       // Update daily stats
       this.dailyPnL += pnl;
@@ -2510,8 +2523,8 @@ ${pnlColor} P&L: ${pnlSign}₹${pnl.toFixed(2)}
       logger.error(`   Entry: ₹${entryPrice} | Exit: ₹${exitPrice}`);
       logger.error(`   P&L: ₹${pnl.toFixed(2)}`);
 
-      // Send exit notification
-      await this.sendExitNotification(activeOrder);
+      // Send exit notification with the exact exit price used
+      await this.sendExitNotification(activeOrder, exitPrice);
 
       // Remove from active tracking
       this.removeOrderFromActiveList(activeOrder.orderId, `FORCE_EXIT_${reason}`);
