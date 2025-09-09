@@ -1980,16 +1980,36 @@ ${Object.keys(healthStatus).length === 0 ? '✅ All systems operational' :
   private sendEntryNotification(order: ActiveOrder): void {
     const tradeType = order.isPaperTrade ? '📄 PAPER' : '💰 REAL';
     const signal = order.signal;
+    const entryPrice = order.entryPrice || signal.entryPrice;
+    const lotSize = config.indices[signal.indexName].lotSize;
+    
+    // ✅ CRITICAL FIX: Validate entry price and calculate position details
+    if (!entryPrice || entryPrice <= 0) {
+      logger.error(`❌ Invalid entry price for notification: ₹${entryPrice}`);
+      return;
+    }
+    
+    const positionValue = entryPrice * lotSize;
+    const targetProfit = (signal.target - entryPrice) * lotSize;
+    const maxLoss = (entryPrice - signal.stopLoss) * lotSize;
+    const riskReward = targetProfit / maxLoss;
     
     const message = `
 🎯 *ENTRY FILLED* ${tradeType}
 📈 ${signal.optionSymbol}
-🏦 ${signal.indexName} (Lot: ${config.indices[signal.indexName].lotSize})
-💰 Entry: ₹${order.entryPrice || signal.entryPrice}
-🎯 Target: ₹${signal.target}
-🛑 Stop Loss: ₹${signal.stopLoss}
-📊 Confidence: ${signal.confidence.toFixed(1)}%
-⏰ Time: ${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })}
+🏦 ${signal.indexName} (Lot Size: ${lotSize})
+
+💰 Entry: ₹${entryPrice.toFixed(2)}
+🎯 Target: ₹${signal.target.toFixed(2)}
+🛑 Stop Loss: ₹${signal.stopLoss.toFixed(2)}
+
+📊 Position Value: ₹${positionValue.toFixed(0)}
+💹 Target Profit: +₹${targetProfit.toFixed(2)}
+💸 Max Loss: -₹${maxLoss.toFixed(2)}
+⚖️ Risk:Reward = 1:${riskReward.toFixed(2)}
+
+📈 Confidence: ${signal.confidence.toFixed(1)}%
+⏰ ${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })}
     `.trim();
 
     logger.info(`📱 Sending entry notification: ${signal.optionSymbol}`);
@@ -2003,18 +2023,37 @@ ${Object.keys(healthStatus).length === 0 ? '✅ All systems operational' :
     const pnlColor = isProfit ? '💰' : '💸';
     const tradeType = order.isPaperTrade ? '📄 PAPER' : '💰 REAL';
     
+    // ✅ CRITICAL FIX: Ensure accurate P&L calculation
     const entryPrice = order.entryPrice || order.signal.entryPrice;
+    const exitPrice = order.exitPrice || 0;
     const lotSize = config.indices[order.signal.indexName].lotSize;
-    const pnl = ((order.exitPrice || 0) - entryPrice) * lotSize;
+    
+    // Validate prices before calculation
+    if (!entryPrice || !exitPrice || entryPrice <= 0 || exitPrice <= 0) {
+      logger.error(`❌ Invalid prices for P&L calculation: Entry=₹${entryPrice}, Exit=₹${exitPrice}`);
+      return;
+    }
+    
+    const pnl = (exitPrice - entryPrice) * lotSize;
+    const pnlPercent = ((exitPrice - entryPrice) / entryPrice * 100).toFixed(1);
+    const pnlSign = pnl >= 0 ? '+' : '';
+    
+    // Calculate position value for reference
+    const positionValue = entryPrice * lotSize;
     
     const message = `
 ${emoji} *${resultText}* ${tradeType}
 📈 ${order.signal.optionSymbol}
 🏦 ${order.signal.indexName} (Lot: ${lotSize})
-💰 Entry: ₹${entryPrice} | Exit: ₹${order.exitPrice}
-${pnlColor} P&L: ₹${pnl.toFixed(2)}
-📊 Daily P&L: ₹${this.dailyPnL.toFixed(2)}
-⏰ Exit Time: ${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })}
+
+💰 Entry: ₹${entryPrice.toFixed(2)}
+💰 Exit:  ₹${exitPrice.toFixed(2)}
+📊 Price Change: ${pnlSign}₹${Math.abs(exitPrice - entryPrice).toFixed(2)} (${pnlSign}${pnlPercent}%)
+
+${pnlColor} P&L: ${pnlSign}₹${pnl.toFixed(2)}
+📊 Position Value: ₹${positionValue.toFixed(0)}
+📈 Daily P&L: ₹${this.dailyPnL.toFixed(2)}
+⏰ ${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })}
     `.trim();
 
     logger.info(`📱 Sending exit notification: ${order.signal.optionSymbol} - ${resultText}`);
@@ -2384,10 +2423,15 @@ ${pnlColor} P&L: ₹${pnl.toFixed(2)}
       // Remove from active tracking
       this.removeOrderFromActiveList(activeOrder.orderId, `FORCE_EXIT_${reason}`);
 
-      // Emit exit event
+      // Emit exit event with proper message formatting
+      const exitMessage = `🚀 *${reason === 'TARGET' ? 'PROFIT TARGET' : 'STOP LOSS'}*
+📈 ${activeOrder.signal.optionSymbol}
+💰 Entry: ₹${entryPrice.toFixed(2)} → Exit: ₹${exitPrice.toFixed(2)}
+📊 P&L: ${pnl >= 0 ? '+' : ''}₹${pnl.toFixed(2)}`;
+
       (process as any).emit('orderExited', {
         order: activeOrder,
-        message: `🚀 *EXIT EXECUTED*\n📈 ${activeOrder.signal.optionSymbol}\n💰 ${reason}: ₹${exitPrice}\n📊 P&L: ₹${pnl.toFixed(2)}`,
+        message: exitMessage,
         pnl: pnl
       });
 
