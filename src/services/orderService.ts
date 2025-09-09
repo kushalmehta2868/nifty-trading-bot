@@ -1631,9 +1631,9 @@ ${Object.keys(healthStatus).length === 0 ? '✅ All systems operational' :
         exitReason = 'TARGET';
         
         logger.error(`🚨 TARGET ACHIEVED! ${activeOrder.signal.optionSymbol}`);
-        logger.error(`   Current Price: ₹${currentPrice}`);
-        logger.error(`   Target Set: ₹${target}`);
-        logger.error(`   IMMEDIATE EXIT at ₹${exitPrice} (market price)`);
+        logger.error(`   Current Price: ₹${currentPrice.toFixed(2)}`);
+        logger.error(`   Target Set: ₹${target.toFixed(2)}`);
+        logger.error(`   EXIT PRICE SET TO: ₹${exitPrice.toFixed(2)} (= current market price)`);
         
         // Additional logging for debugging target profits
         const targetExcessAmount = currentPrice - target;
@@ -1650,9 +1650,9 @@ ${Object.keys(healthStatus).length === 0 ? '✅ All systems operational' :
         exitReason = 'STOPLOSS';
         
         logger.error(`🚨 STOP LOSS TRIGGERED! ${activeOrder.signal.optionSymbol}`);
-        logger.error(`   Current Price: ₹${currentPrice}`);
-        logger.error(`   Stop Loss Set: ₹${stopLoss}`);
-        logger.error(`   IMMEDIATE EXIT at ₹${exitPrice} (market price)`);
+        logger.error(`   Current Price: ₹${currentPrice.toFixed(2)}`);
+        logger.error(`   Stop Loss Set: ₹${stopLoss.toFixed(2)}`);
+        logger.error(`   EXIT PRICE SET TO: ₹${exitPrice.toFixed(2)} (= current market price)`);
         
         // Additional logging for debugging SL failures
         const slBreachAmount = stopLoss - currentPrice;
@@ -1705,8 +1705,8 @@ ${Object.keys(healthStatus).length === 0 ? '✅ All systems operational' :
         // ✅ PROCEED WITH EXIT - Remove complex validation that was blocking exits
         logger.error(`🚀 PROCEEDING WITH EXIT: ${activeOrder.signal.optionSymbol}`);
         logger.error(`   Reason: ${exitReason}`);
-        logger.error(`   Current Price: ₹${currentPrice}`);
-        logger.error(`   Exit Price: ₹${exitPrice}`);
+        logger.error(`   Current Price: ₹${currentPrice.toFixed(2)}`);
+        logger.error(`   Exit Price to be stored: ₹${exitPrice.toFixed(2)}`);
         logger.error(`   Expected P&L: ₹${((exitPrice - entryPrice) * config.indices[activeOrder.signal.indexName].lotSize).toFixed(2)}`);
 
         // Calculate P&L
@@ -1723,6 +1723,9 @@ ${Object.keys(healthStatus).length === 0 ? '✅ All systems operational' :
         activeOrder.exitReason = exitReason;
         activeOrder.pnl = pnl;
         activeOrder.tradingDuration = tradingDuration;
+        
+        // ✅ CRITICAL DEBUG: Confirm the exit price stored in paper trade
+        logger.error(`✅ PAPER TRADE EXIT PRICE STORED: activeOrder.exitPrice = ₹${activeOrder.exitPrice.toFixed(2)}`);
         activeOrder.filledQuantity = activeOrder.quantity || config.indices[activeOrder.signal.indexName].lotSize;
 
         // Enhanced daily P&L tracking
@@ -2028,9 +2031,17 @@ ${Object.keys(healthStatus).length === 0 ? '✅ All systems operational' :
     const exitPrice = order.exitPrice || 0;
     const lotSize = config.indices[order.signal.indexName].lotSize;
     
+    // Enhanced validation with detailed logging
+    logger.info(`🔍 EXIT NOTIFICATION DEBUG: ${order.signal.optionSymbol}`);
+    logger.info(`   Entry Price: ₹${entryPrice} (from: ${order.entryPrice ? 'order.entryPrice' : 'signal.entryPrice'})`);
+    logger.info(`   Exit Price: ₹${exitPrice} (from: order.exitPrice)`);
+    logger.info(`   Lot Size: ${lotSize}`);
+    
     // Validate prices before calculation
     if (!entryPrice || !exitPrice || entryPrice <= 0 || exitPrice <= 0) {
       logger.error(`❌ Invalid prices for P&L calculation: Entry=₹${entryPrice}, Exit=₹${exitPrice}`);
+      logger.error(`❌ Order object: entryPrice=${order.entryPrice}, exitPrice=${order.exitPrice}`);
+      logger.error(`❌ Signal object: entryPrice=${order.signal.entryPrice}, target=${order.signal.target}, stopLoss=${order.signal.stopLoss}`);
       return;
     }
     
