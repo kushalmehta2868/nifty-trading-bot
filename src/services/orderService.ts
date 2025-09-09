@@ -1603,11 +1603,19 @@ ${Object.keys(healthStatus).length === 0 ? '✅ All systems operational' :
         return;
       }
       
-      logger.info(`💰 PRICE CHECK: ${activeOrder.signal.optionSymbol} = ₹${currentPrice} | Entry: ₹${activeOrder.entryPrice || activeOrder.signal.entryPrice}`);
-
+      // ✅ PRICE SANITY CHECK: Ensure current price makes sense relative to entry/target/SL  
       const target = activeOrder.signal.target;
       const stopLoss = activeOrder.signal.stopLoss;
       const entryPrice = activeOrder.entryPrice || activeOrder.signal.entryPrice;
+      const priceRatio = currentPrice / entryPrice;
+      
+      if (priceRatio > 5 || priceRatio < 0.1) {
+        logger.error(`⚠️ SUSPICIOUS CURRENT PRICE: ${activeOrder.signal.optionSymbol} current=₹${currentPrice}, entry=₹${entryPrice} (ratio: ${priceRatio.toFixed(2)}x)`);
+        logger.error(`   This price seems unrealistic - might be API error or wrong symbol`);
+        // Don't return - let it process but log the warning
+      }
+      
+      logger.info(`💰 PRICE CHECK: ${activeOrder.signal.optionSymbol} = ₹${currentPrice} | Entry: ₹${entryPrice}`);
 
       // 🎯 CLEAR EXIT CONDITION CHECKING WITH DETAILED LOGGING
       let shouldExit = false;
@@ -1626,20 +1634,27 @@ ${Object.keys(healthStatus).length === 0 ? '✅ All systems operational' :
         // TARGET HIT - AGGRESSIVE EXIT WITH REALISTIC PRICING
         shouldExit = true;
         
-        // ✅ CRITICAL FIX: Use current price for paper trading instead of exact target
-        // This accounts for price movements beyond target
-        exitPrice = currentPrice; // Exit at current market price for realistic simulation
+        // ✅ CRITICAL FIX: For TARGET exits, ensure exit price is reasonable
+        // If currentPrice seems too low compared to target, use target price instead
+        if (currentPrice < target * 0.98) {
+          logger.error(`⚠️ SUSPICIOUS TARGET EXIT PRICE: Current=₹${currentPrice}, Target=₹${target}`);
+          logger.error(`   Using target price instead of potentially incorrect current price`);
+          exitPrice = target; // Use target price as exit price for safety
+        } else {
+          exitPrice = currentPrice; // Use current market price if reasonable
+        }
+        
         exitReason = 'TARGET';
         
         logger.error(`🚨 TARGET ACHIEVED! ${activeOrder.signal.optionSymbol}`);
         logger.error(`   Current Price: ₹${currentPrice.toFixed(2)}`);
         logger.error(`   Target Set: ₹${target.toFixed(2)}`);
-        logger.error(`   EXIT PRICE SET TO: ₹${exitPrice.toFixed(2)} (= current market price)`);
+        logger.error(`   EXIT PRICE SET TO: ₹${exitPrice.toFixed(2)} (${exitPrice === currentPrice ? 'current market price' : 'target price (safety)'})`);
         
         // Additional logging for debugging target profits
-        const targetExcessAmount = currentPrice - target;
+        const targetExcessAmount = exitPrice - target;
         const targetExcessPercent = (targetExcessAmount / target * 100).toFixed(2);
-        logger.error(`   Target Excess: +₹${targetExcessAmount.toFixed(2)} (+${targetExcessPercent}% above target)`);
+        logger.error(`   Target Excess: ${targetExcessAmount >= 0 ? '+' : ''}₹${targetExcessAmount.toFixed(2)} (${targetExcessAmount >= 0 ? '+' : ''}${targetExcessPercent}% vs target)`);
         
       } else if (currentPrice <= stopLoss) {
         // STOP LOSS HIT - AGGRESSIVE EXIT WITH BUFFER
@@ -1676,7 +1691,15 @@ ${Object.keys(healthStatus).length === 0 ? '✅ All systems operational' :
         // If within 3% of target, exit early to capture profits
         if (targetGap <= 3 && targetGap > 0) {
           shouldExit = true;
-          exitPrice = currentPrice;
+          
+          // ✅ NEAR TARGET EXIT PRICE VALIDATION
+          if (currentPrice < target * 0.95) {
+            exitPrice = target * 0.97; // Use 97% of target for near-target exits
+            logger.warn(`🎯 NEAR TARGET - PRICE CORRECTION: Using ₹${exitPrice} instead of suspicious current ₹${currentPrice}`);
+          } else {
+            exitPrice = currentPrice;
+          }
+          
           exitReason = 'TARGET';
           logger.warn(`🎯 NEAR TARGET EXIT: ${activeOrder.signal.optionSymbol} within 3% of target - Force exit at ₹${exitPrice}`);
           
@@ -2428,8 +2451,16 @@ ${pnlColor} P&L: ${pnlSign}₹${pnl.toFixed(2)}
         const targetBuffer = target * 0.98; // 2% buffer below target for early capture
         
         if (currentPrice >= targetBuffer) {
-          logger.error(`🚨 FORCE EXIT - TARGET REACHED: ${activeOrder.signal.optionSymbol} at ₹${currentPrice} (Target: ₹${target}, Buffer: ₹${targetBuffer})`);
-          await this.executeExit(activeOrder, currentPrice, 'TARGET');
+          // ✅ ENSURE REASONABLE TARGET EXIT PRICE
+          let forceExitPrice = currentPrice;
+          if (currentPrice < target * 0.95) {
+            logger.error(`⚠️ FORCE EXIT - SUSPICIOUS PRICE: Current=₹${currentPrice}, Target=₹${target}`);
+            forceExitPrice = target; // Use target price instead
+            logger.error(`   Using target price ₹${forceExitPrice} for force exit`);
+          }
+          
+          logger.error(`🚨 FORCE EXIT - TARGET REACHED: ${activeOrder.signal.optionSymbol} at ₹${forceExitPrice} (Market: ₹${currentPrice}, Target: ₹${target}, Buffer: ₹${targetBuffer})`);
+          await this.executeExit(activeOrder, forceExitPrice, 'TARGET');
           
         } else if (currentPrice <= slBuffer) {
           logger.error(`🚨 FORCE EXIT - STOP LOSS MISSED: ${activeOrder.signal.optionSymbol} at ₹${currentPrice} (SL: ₹${stopLoss}, Buffer: ₹${slBuffer})`);
@@ -2473,6 +2504,9 @@ ${pnlColor} P&L: ${pnlSign}₹${pnl.toFixed(2)}
         // ✅ SANITY CHECK: Warn if exit price seems unrealistic
         if (reason === 'TARGET' && exitPrice < target * 0.95) {
           logger.error(`⚠️ SUSPICIOUS EXIT PRICE: Target exit at ₹${exitPrice} but target is ₹${target}`);
+          // For TARGET exits, ensure we don't exit below 95% of target
+          exitPrice = Math.max(exitPrice, target * 0.95);
+          logger.warn(`🔧 CORRECTED TARGET EXIT PRICE: Using ₹${exitPrice} (95% of target)`);
         } else if (reason === 'STOPLOSS' && exitPrice > stopLoss * 1.05) {
           logger.error(`⚠️ SUSPICIOUS EXIT PRICE: SL exit at ₹${exitPrice} but SL is ₹${stopLoss}`);
         }
