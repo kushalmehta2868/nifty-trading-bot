@@ -2587,6 +2587,38 @@ ${pnlColor} P&L: ${pnlSign}₹${pnl.toFixed(2)}
       logger.info('🔍 Order monitoring stopped');
     }
   }
+
+  public resetState(): void {
+    logger.info('🔄 ORDER SERVICE RESET: Clearing all state...');
+    
+    // Clear active orders
+    this.activeOrders = [];
+    
+    // Reset all statistics
+    this.dailyTrades = 0;
+    this.dailyPnL = 0;
+    this.dailyGrossPnL = 0;
+    this.dailyBrokerage = 0;
+    this.successfulTrades = 0;
+    this.failedTrades = 0;
+    this.totalHoldingTime = 0;
+    this.maxDrawdown = 0;
+    this.currentDrawdown = 0;
+    
+    // Clear any intervals if running
+    if (this.monitoringInterval) {
+      clearInterval(this.monitoringInterval);
+      this.monitoringInterval = null;
+    }
+    
+    // Remove event listeners
+    if (this.tradingSignalHandler) {
+      (process as any).removeListener('tradingSignal', this.tradingSignalHandler);
+      this.tradingSignalHandler = undefined;
+    }
+    
+    logger.info('✅ Order service state reset complete');
+  }
 }
 
 export const orderService = new OrderService();

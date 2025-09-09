@@ -6,6 +6,7 @@ import { healthServer } from './services/healthServer';
 import { healthMonitor } from './services/healthMonitor';
 import { logger } from './utils/logger';
 import { dailyCleanup } from './utils/dailyCleanup';
+import { startupReset } from './utils/startupReset';
 import { isMarketOpen, getTimeUntilMarketOpen, formatTimeUntilMarketOpen, getMarketStatus } from './utils/marketHours';
 import { TradingStats } from './types';
 
@@ -24,6 +25,16 @@ class WebSocketTradingBot {
   public async start(): Promise<void> {
     try {
       logger.info('🚀 WebSocket Trading Bot Starting...');
+
+      // ✅ STEP 1: COMPLETE STARTUP RESET - Everything fresh
+      await startupReset.performFullReset();
+      
+      // Reset all service states
+      strategy.resetState();
+      orderService.resetState();
+      
+      // Validate fresh start
+      await startupReset.validateFreshStart();
 
       // Start health server first
       healthServer.start();
@@ -61,8 +72,9 @@ class WebSocketTradingBot {
       // 5. Initialize Health Monitor
       await healthMonitor.initialize();
 
-      // 6. Send startup notification
+      // 6. Send startup notification with reset confirmation
       await telegramBot.sendStartupMessage();
+      await telegramBot.sendMessage('🔄 FRESH START: All data cleared, positions reset, statistics zeroed. Bot is completely fresh and ready for trading!');
 
       this.isRunning = true;
       logger.info('✅ All services initialized successfully with comprehensive monitoring');
@@ -107,6 +119,10 @@ class WebSocketTradingBot {
     this.marketOpenTimeout = setTimeout(async () => {
       logger.info('🔔 Market opening - Activating trading bot');
       await telegramBot.sendMessage('🔔 Market is now open - Bot is activating!');
+
+      // ✅ FRESH START: Reset state when market opens
+      strategy.resetState();
+      orderService.resetState();
 
       // Initialize trading services
       await webSocketFeed.initialize();

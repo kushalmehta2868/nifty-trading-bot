@@ -1701,6 +1701,36 @@ class TradingStrategy {
     
     logger.info('✅ Strategy stopped and cleaned up');
   }
+
+  public resetState(): void {
+    logger.info('🔄 STRATEGY RESET: Clearing all state...');
+    
+    // Clear all tracking variables
+    this.lastSignalTime = {};
+    this.activePositions = {};
+    
+    // Clear price buffers
+    this.priceBuffers = {
+      NIFTY: [],
+      BANKNIFTY: []
+    };
+    
+    // Clear event handlers map
+    this.eventHandlers.clear();
+    
+    // Clear any intervals if running
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = null;
+    }
+    
+    if (this.positionLoggingInterval) {
+      clearInterval(this.positionLoggingInterval);
+      this.positionLoggingInterval = null;
+    }
+    
+    logger.info('✅ Strategy state reset complete');
+  }
 }
 
 export const strategy = new TradingStrategy();
