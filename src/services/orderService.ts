@@ -1594,6 +1594,7 @@ ${Object.keys(healthStatus).length === 0 ? '✅ All systems operational' :
           currentPrice = entryPrice * decayFactor;
           
           logger.warn(`🔄 ESTIMATED PRICE: ${activeOrder.signal.optionSymbol} = ₹${currentPrice} (${decayFactor.toFixed(2)}x decay after ${hoursHeld.toFixed(1)}h)`);
+          logger.warn(`⚠️ USING ESTIMATED PRICE - API fetch failed, this may not be accurate for exit decisions`);
         }
       }
       
@@ -2026,20 +2027,40 @@ ${Object.keys(healthStatus).length === 0 ? '✅ All systems operational' :
     const pnlColor = isProfit ? '💰' : '💸';
     const tradeType = order.isPaperTrade ? '📄 PAPER' : '💰 REAL';
     
-    // ✅ CRITICAL FIX: Ensure accurate P&L calculation
+    // ✅ CRITICAL FIX: Ensure accurate P&L calculation with multiple fallbacks
     const entryPrice = order.entryPrice || order.signal.entryPrice;
-    const exitPrice = order.exitPrice || 0;
+    let exitPrice = order.exitPrice || 0;
     const lotSize = config.indices[order.signal.indexName].lotSize;
     
     // Enhanced validation with detailed logging
     logger.info(`🔍 EXIT NOTIFICATION DEBUG: ${order.signal.optionSymbol}`);
     logger.info(`   Entry Price: ₹${entryPrice} (from: ${order.entryPrice ? 'order.entryPrice' : 'signal.entryPrice'})`);
     logger.info(`   Exit Price: ₹${exitPrice} (from: order.exitPrice)`);
+    logger.info(`   Exit Reason: ${order.exitReason}`);
     logger.info(`   Lot Size: ${lotSize}`);
     
-    // Validate prices before calculation
+    // ✅ EMERGENCY FALLBACK: If exit price is still invalid, use target/stopLoss
+    if (!exitPrice || exitPrice <= 0) {
+      logger.error(`❌ EXIT PRICE IS INVALID: ₹${exitPrice} - using fallback`);
+      
+      if (order.exitReason === 'TARGET') {
+        exitPrice = order.signal.target;
+        logger.warn(`🆘 NOTIFICATION FALLBACK: Using target price ₹${exitPrice} instead of invalid exit price`);
+      } else if (order.exitReason === 'STOPLOSS') {
+        exitPrice = order.signal.stopLoss;
+        logger.warn(`🆘 NOTIFICATION FALLBACK: Using stopLoss price ₹${exitPrice} instead of invalid exit price`);
+      } else {
+        logger.error(`❌ Cannot determine exit price for notification - aborting`);
+        return;
+      }
+    } else {
+      // Log when we have a valid exit price
+      logger.info(`✅ Using stored exit price: ₹${exitPrice} for ${order.signal.optionSymbol}`);
+    }
+    
+    // Final validation
     if (!entryPrice || !exitPrice || entryPrice <= 0 || exitPrice <= 0) {
-      logger.error(`❌ Invalid prices for P&L calculation: Entry=₹${entryPrice}, Exit=₹${exitPrice}`);
+      logger.error(`❌ FINAL VALIDATION FAILED: Entry=₹${entryPrice}, Exit=₹${exitPrice}`);
       logger.error(`❌ Order object: entryPrice=${order.entryPrice}, exitPrice=${order.exitPrice}`);
       logger.error(`❌ Signal object: entryPrice=${order.signal.entryPrice}, target=${order.signal.target}, stopLoss=${order.signal.stopLoss}`);
       return;
@@ -2371,9 +2392,22 @@ ${pnlColor} P&L: ${pnlSign}₹${pnl.toFixed(2)}
           const entryPrice = activeOrder.entryPrice || activeOrder.signal.entryPrice;
           const timeHeld = (Date.now() - (activeOrder.entryTime?.getTime() || activeOrder.timestamp.getTime())) / (1000 * 60 * 60);
           
-          // Estimate based on time decay (conservative approach)
-          currentPrice = entryPrice * Math.max(0.5, 1 - (timeHeld * 0.08)); // 8% decay per hour
-          logger.warn(`🔄 FORCE EXIT using estimated price: ${activeOrder.signal.optionSymbol} = ₹${currentPrice} (${timeHeld.toFixed(1)}h decay)`);
+          // ✅ MORE CONSERVATIVE ESTIMATION to avoid wild exit prices
+          const decayFactor = Math.max(0.6, 1 - (timeHeld * 0.06)); // 6% decay per hour, min 60%
+          currentPrice = entryPrice * decayFactor;
+          
+          // ✅ SANITY CHECK: Ensure estimated price stays within reasonable bounds
+          const target = activeOrder.signal.target;
+          const stopLoss = activeOrder.signal.stopLoss;
+          
+          // Cap estimated price between 80% of SL and 120% of target
+          const minPrice = stopLoss * 0.8;
+          const maxPrice = target * 1.2;
+          currentPrice = Math.max(minPrice, Math.min(maxPrice, currentPrice));
+          
+          logger.warn(`🔄 FORCE EXIT using BOUNDED estimated price: ${activeOrder.signal.optionSymbol} = ₹${currentPrice}`);
+          logger.warn(`   Time held: ${timeHeld.toFixed(1)}h | Decay factor: ${decayFactor.toFixed(2)} | Bounds: ₹${minPrice}-₹${maxPrice}`);
+          logger.error(`⚠️ WARNING: Using estimated price for exit - may not reflect actual market conditions`);
         }
 
         if (!currentPrice || currentPrice <= 0) {
@@ -2408,9 +2442,57 @@ ${pnlColor} P&L: ${pnlSign}₹${pnl.toFixed(2)}
   // ✅ DEDICATED EXIT EXECUTION METHOD to avoid code duplication
   private async executeExit(activeOrder: ActiveOrder, exitPrice: number, reason: 'TARGET' | 'STOPLOSS'): Promise<void> {
     try {
+      // ✅ CRITICAL VALIDATION: Log the exact exit price source and validate
+      logger.error(`🔍 EXECUTE EXIT DEBUG: ${activeOrder.signal.optionSymbol}`);
+      logger.error(`   Raw exitPrice parameter: ${exitPrice}`);
+      logger.error(`   Exit reason: ${reason}`);
+      logger.error(`   Entry price: ₹${activeOrder.entryPrice || activeOrder.signal.entryPrice}`);
+      logger.error(`   Signal target: ₹${activeOrder.signal.target}`);
+      logger.error(`   Signal stopLoss: ₹${activeOrder.signal.stopLoss}`);
+      
+      // ✅ SANITY CHECK: Ensure exit price makes sense relative to entry/target/SL
       const entryPrice = activeOrder.entryPrice || activeOrder.signal.entryPrice;
+      const target = activeOrder.signal.target;
+      const stopLoss = activeOrder.signal.stopLoss;
+      
+      if (!exitPrice || exitPrice <= 0) {
+        logger.error(`❌ INVALID EXIT PRICE: ${activeOrder.signal.optionSymbol} exitPrice=${exitPrice}`);
+        
+        // Emergency fallback: use target or stopLoss as exit price
+        if (reason === 'TARGET') {
+          exitPrice = target;
+          logger.warn(`🆘 Using TARGET price as exit: ₹${exitPrice}`);
+        } else {
+          exitPrice = stopLoss;
+          logger.warn(`🆘 Using STOPLOSS price as exit: ₹${exitPrice}`);
+        }
+      } else {
+        // ✅ SANITY CHECK: Warn if exit price seems unrealistic
+        if (reason === 'TARGET' && exitPrice < target * 0.95) {
+          logger.error(`⚠️ SUSPICIOUS EXIT PRICE: Target exit at ₹${exitPrice} but target is ₹${target}`);
+        } else if (reason === 'STOPLOSS' && exitPrice > stopLoss * 1.05) {
+          logger.error(`⚠️ SUSPICIOUS EXIT PRICE: SL exit at ₹${exitPrice} but SL is ₹${stopLoss}`);
+        }
+        
+        // Check for obviously wrong estimates
+        const priceRatio = exitPrice / entryPrice;
+        if (priceRatio > 3 || priceRatio < 0.2) {
+          logger.error(`🚨 EXTREMELY SUSPICIOUS EXIT PRICE: ${exitPrice} vs entry ${entryPrice} (ratio: ${priceRatio.toFixed(2)}x)`);
+          
+          // Use more conservative exit price
+          if (reason === 'TARGET') {
+            exitPrice = Math.min(exitPrice, target * 1.1); // Cap at 110% of target
+          } else {
+            exitPrice = Math.max(exitPrice, stopLoss * 0.9); // Floor at 90% of SL
+          }
+          logger.warn(`🔧 CORRECTED EXIT PRICE: Using ₹${exitPrice}`);
+        }
+      }
+
       const pnl = (exitPrice - entryPrice) * config.indices[activeOrder.signal.indexName].lotSize;
       const exitTime = new Date();
+
+      logger.error(`✅ FINAL EXIT EXECUTION: ${activeOrder.signal.optionSymbol} at ₹${exitPrice.toFixed(2)} (${reason}) | P&L: ₹${pnl.toFixed(2)}`);
 
       // ✅ ATOMIC UPDATE
       activeOrder.status = reason === 'TARGET' ? 'EXITED_TARGET' : 'EXITED_SL';
