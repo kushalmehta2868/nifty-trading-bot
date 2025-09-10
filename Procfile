@@ -1,0 +1,1 @@
+web: gunicorn --bind 0.0.0.0:$PORT ai-models.simple_ai_service:app

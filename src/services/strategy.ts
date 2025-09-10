@@ -9,6 +9,7 @@ import { logger } from '../utils/logger';
 import { isMarketOpen } from '../utils/marketHours';
 import { angelAPI } from './angelAPI';
 import { webSocketFeed } from './webSocketFeed';
+import { aiIntegration } from './aiIntegration';
 
 interface PriceBufferItem {
   price: number;
@@ -288,17 +289,99 @@ class TradingStrategy {
 
     // Try Strategy 3 first (Multi-Timeframe Confluence) - Highest accuracy
     const confluenceSignal = await this.analyzeMultiTimeframeConfluence(indexName, currentPrice, prices, priceBuffer);
-    if (confluenceSignal) return confluenceSignal;
+    if (confluenceSignal) return await this.enhanceSignalWithAI(confluenceSignal, priceBuffer);
 
     // Try Strategy 1 (Bollinger + RSI) - High accuracy
     const bollingerSignal = await this.analyzeBollingerRSIStrategy(indexName, currentPrice, prices, priceBuffer);
-    if (bollingerSignal) return bollingerSignal;
+    if (bollingerSignal) return await this.enhanceSignalWithAI(bollingerSignal, priceBuffer);
 
     // Try Strategy 2 (Price Action + Momentum) - Fast response
     const priceActionSignal = await this.analyzePriceActionStrategy(indexName, currentPrice, prices, priceBuffer);
-    if (priceActionSignal) return priceActionSignal;
+    if (priceActionSignal) return await this.enhanceSignalWithAI(priceActionSignal, priceBuffer);
 
     return null; // No signals from any strategy
+  }
+
+  /**
+   * 🤖 Enhance trading signal with AI predictions
+   */
+  private async enhanceSignalWithAI(
+    originalSignal: TradingSignal, 
+    priceBuffer: PriceBufferItem[]
+  ): Promise<TradingSignal> {
+    try {
+      // Prepare technical indicators for AI analysis
+      const prices = priceBuffer.map(item => item.price);
+      const indicators = this.calculateTechnicalIndicators(prices, originalSignal.spotPrice);
+      const marketConditions = this.assessMarketConditions(prices, indicators);
+      
+      // Get AI enhancement
+      const aiAnalysis = await aiIntegration.enhanceSignalWithAI(
+        originalSignal,
+        indicators,
+        marketConditions
+      );
+      
+      // Log AI analysis
+      if (aiAnalysis.aiAnalysis.aiPrediction) {
+        logger.info(`🤖 AI Analysis for ${originalSignal.indexName}:`);
+        logger.info(`   Original Confidence: ${originalSignal.confidence.toFixed(1)}%`);
+        logger.info(`   AI Enhanced: ${aiAnalysis.enhancedSignal.confidence.toFixed(1)}% (${aiAnalysis.aiAnalysis.confidenceAdjustment > 0 ? '+' : ''}${aiAnalysis.aiAnalysis.confidenceAdjustment})`);
+        logger.info(`   AI Decision: ${aiAnalysis.aiAnalysis.finalDecision}`);
+        logger.info(`   AI Reasoning: ${aiAnalysis.aiAnalysis.reasoning.join(', ')}`);
+      } else {
+        logger.info(`🤖 AI Analysis: ${aiAnalysis.aiAnalysis.reasoning[0]}`);
+      }
+      
+      return aiAnalysis.enhancedSignal;
+      
+    } catch (error) {
+      logger.error(`AI enhancement failed: ${(error as Error).message}`);
+      return originalSignal; // Return original signal if AI fails
+    }
+  }
+  
+  /**
+   * Calculate technical indicators for AI analysis
+   */
+  private calculateTechnicalIndicators(prices: number[], currentPrice: number) {
+    const ema = this.calculateEMA(prices, 20);
+    const rsi = this.calculateRSI(prices, 14);
+    const volatility = this.calculateBasicVolatility(prices);
+    
+    return {
+      ema,
+      rsi,
+      momentum: prices.length > 1 ? (currentPrice - prices[prices.length - 2]) / prices[prices.length - 2] : 0,
+      volatility,
+      support: Math.min(...prices.slice(-10)),
+      resistance: Math.max(...prices.slice(-10)),
+      bollingerUpper: ema + (volatility * currentPrice * 2),
+      bollingerMiddle: ema,
+      bollingerLower: ema - (volatility * currentPrice * 2),
+      bollingerSqueeze: false
+    };
+  }
+  
+  /**
+   * Assess current market conditions for AI analysis
+   */
+  private assessMarketConditions(prices: number[], indicators: any) {
+    const trend = indicators.momentum > 0.01 ? 'BULLISH' : 
+                 indicators.momentum < -0.01 ? 'BEARISH' : 'SIDEWAYS';
+    
+    const volatilityRegime = indicators.volatility > 0.25 ? 'HIGH' :
+                            indicators.volatility > 0.15 ? 'MEDIUM' : 'LOW';
+    
+    const hour = new Date().getHours();
+    const timeOfDay = hour >= 9 && hour < 11 ? 'OPENING' :
+                     hour >= 14 && hour < 16 ? 'CLOSING' : 'MID_DAY';
+    
+    return {
+      trend,
+      volatilityRegime,
+      timeOfDay
+    };
   }
 
   // 🏆 STRATEGY 3: Multi-Timeframe Confluence (Highest Accuracy - 90%+)

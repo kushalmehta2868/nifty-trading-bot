@@ -4,6 +4,7 @@ import { telegramBot } from './services/telegramBot';
 import { orderService } from './services/orderService';
 import { healthServer } from './services/healthServer';
 import { healthMonitor } from './services/healthMonitor';
+import { aiIntegration } from './services/aiIntegration';
 import { logger } from './utils/logger';
 import { dailyCleanup } from './utils/dailyCleanup';
 import { startupReset } from './utils/startupReset';
@@ -65,16 +66,26 @@ class WebSocketTradingBot {
       await strategy.initialize();
       logger.info('✅ Strategy initialized');
 
-      // 4. Initialize other services
+      // 4. Initialize AI Integration
+      await aiIntegration.initialize();
+      logger.info('✅ AI Integration initialized');
+
+      // 5. Initialize other services
       await telegramBot.initialize();
       await orderService.initialize();
 
-      // 5. Initialize Health Monitor
+      // 6. Initialize Health Monitor
       await healthMonitor.initialize();
 
-      // 6. Send startup notification with reset confirmation
+      // 7. Send startup notification with reset confirmation
       await telegramBot.sendStartupMessage();
-      await telegramBot.sendMessage('🔄 FRESH START: All data cleared, positions reset, statistics zeroed. Bot is completely fresh and ready for trading!');
+      
+      const aiStatus = aiIntegration.getStatus();
+      const aiMessage = aiStatus.enabled ? 
+        `🤖 AI Integration: ✅ ACTIVE\n   Service: ${aiStatus.serviceUrl}\n   Status: ${aiStatus.healthy ? '🟢 Healthy' : '⚠️ Unhealthy'}` :
+        `🤖 AI Integration: ⚠️ DISABLED (trading with technical analysis only)`;
+        
+      await telegramBot.sendMessage(`🔄 FRESH START: All data cleared, positions reset, statistics zeroed. Bot is completely fresh and ready for trading!\n\n${aiMessage}`);
 
       this.isRunning = true;
       logger.info('✅ All services initialized successfully with comprehensive monitoring');

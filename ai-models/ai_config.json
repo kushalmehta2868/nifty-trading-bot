@@ -1,0 +1,27 @@
+{
+  "ai_service": {
+    "host": "0.0.0.0",
+    "port": 5000,
+    "debug": false,
+    "model_path": "./models",
+    "data_path": "../ai-data"
+  },
+  "model_training": {
+    "retrain_interval_hours": 24,
+    "min_samples_for_training": 100,
+    "validation_split": 0.2,
+    "random_state": 42
+  },
+  "sentiment_analysis": {
+    "enable_twitter": false,
+    "enable_news": true,
+    "update_interval_minutes": 30,
+    "sentiment_weight": 0.3
+  },
+  "prediction_settings": {
+    "confidence_threshold": 0.6,
+    "max_prediction_age_minutes": 5,
+    "combine_with_technical": true,
+    "override_threshold": 0.8
+  }
+}

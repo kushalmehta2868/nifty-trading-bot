@@ -70,7 +70,19 @@
       "Read(/C:\\Users\\Asus\\Desktop\\trading-bot\\src\\services/**)",
       "Read(/C:\\Users\\Asus\\Desktop\\trading-bot\\src\\services/**)",
       "Read(/C:\\Users\\Asus\\Desktop\\trading-bot\\src\\services/**)",
-      "Read(/C:\\Users\\Asus\\Desktop\\trading-bot\\src\\services/**)"
+      "Read(/C:\\Users\\Asus\\Desktop\\trading-bot\\src\\services/**)",
+      "Bash(python:*)",
+      "Bash(ai_envScriptspip install numpy pandas scikit-learn flask flask-cors requests matplotlib joblib textblob)",
+      "Bash(./ai_env/Scripts/pip.exe install numpy pandas scikit-learn flask flask-cors requests matplotlib joblib textblob)",
+      "Bash(./ai_env/Scripts/python.exe ai_prediction_service.py)",
+      "Bash(./ai_env/Scripts/pip.exe install flask flask-cors numpy pandas scikit-learn requests matplotlib joblib textblob yfinance)",
+      "Bash(./ai_env/Scripts/pip.exe list)",
+      "Bash(./ai_env/Scripts/pip.exe install flask flask-cors pandas scikit-learn requests matplotlib textblob yfinance)",
+      "Bash(./ai_env/Scripts/pip.exe install flask flask-cors --no-deps)",
+      "Bash(./ai_env/Scripts/python.exe test_ai_system.py)",
+      "Bash(./ai_env/Scripts/pip.exe install seaborn tensorflow)",
+      "Bash(./ai_env/Scripts/python.exe simple_ai_service.py)",
+      "Bash(npm start)"
     ],
     "deny": [],
     "ask": []

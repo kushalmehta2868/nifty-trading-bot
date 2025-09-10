@@ -26,3 +26,5 @@ Thumbs.db
 *.swp
 
 dist
+
+ai_env
