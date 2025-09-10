@@ -406,8 +406,8 @@ class TradingStrategy {
         optionType: 'CE',
         optionSymbol: this.generateOptionSymbol(indexName, strike, 'CE'),
         entryPrice: estimatedPremium, // Use estimated premium initially
-        target: estimatedPremium * 1.25, // 25% profit target estimate
-        stopLoss: estimatedPremium * 0.75, // 25% stop loss estimate
+        target: estimatedPremium * 1.30, // 30% profit target
+        stopLoss: estimatedPremium * 0.80, // 20% stop loss
         confidence: Math.min(98, baseConfidence + confluenceBonus + trendBonus),
         timestamp: new Date(),
         technicals: {
@@ -434,8 +434,8 @@ class TradingStrategy {
         optionType: 'PE',
         optionSymbol: this.generateOptionSymbol(indexName, strike, 'PE'),
         entryPrice: estimatedPremium, // Use estimated premium initially
-        target: estimatedPremium * 1.25, // 25% profit target estimate
-        stopLoss: estimatedPremium * 0.75, // 25% stop loss estimate
+        target: estimatedPremium * 1.30, // 30% profit target
+        stopLoss: estimatedPremium * 0.80, // 20% stop loss
         confidence: Math.min(98, baseConfidence + confluenceBonus + trendBonus),
         timestamp: new Date(),
         technicals: {
@@ -1264,10 +1264,10 @@ class TradingStrategy {
     const longerVolatility = this.calculateBasicVolatility(longerPrices);
     const isExpanding = currentVol > longerVolatility * 1.2;
 
-    // Adaptive targets based on current volatility
+    // Adaptive targets based on current volatility - Fixed 30% target, 20% SL
     const volMultiplier = Math.max(1.5, Math.min(3.0, currentVol * 100));
-    const adaptiveTarget = 1 + (volMultiplier * 0.05); // 7.5% to 15% target
-    const adaptiveSL = 1 - (volMultiplier * 0.03); // 4.5% to 9% stop loss
+    const adaptiveTarget = 1.30; // Fixed 30% target
+    const adaptiveSL = 0.80; // Fixed 20% stop loss
 
     return {
       current: currentVol,

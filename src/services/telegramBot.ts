@@ -243,7 +243,7 @@ ${marketStatusText}
 • Confidence Threshold: ${config.strategy.confidenceThreshold}%+
 
 ⚡ *ADVANCED FEATURES:*
-• 📊 Adaptive volatility-based targets (7.5%-15%)
+• 📊 Fixed risk-reward ratio (30% target, 20% SL)
 • 🎯 Multi-timeframe confluence scoring
 • 📈 Real-time Bollinger squeeze detection
 • 🚀 Support/resistance bounce analysis
