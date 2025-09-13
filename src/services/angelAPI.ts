@@ -17,6 +17,21 @@ class AngelAPI {
   private refreshToken: string | null = null;
   private tokensFile = 'angel-tokens.json';
 
+  // Enhanced authentication management
+  private authRetryQueue: Array<{resolve: Function, reject: Function}> = [];
+  private isAuthenticating = false;
+  private lastAuthAttempt = 0;
+  private authFailureCount = 0;
+  private readonly MAX_AUTH_FAILURES = 5;
+  private readonly AUTH_COOLDOWN = 300000; // 5 minutes
+
+  // Option token caching system
+  private optionTokenCache = new Map<string, { token: string; expiry: number; strike: number; type: string; }>();
+  private masterDataCache: any[] | null = null;
+  private masterDataExpiry = 0;
+  private readonly CACHE_DURATION = 4 * 60 * 60 * 1000; // 4 hours
+  private readonly MASTER_DATA_DURATION = 24 * 60 * 60 * 1000; // 24 hours
+
   get jwtToken(): string | null {
     return this._jwtToken;
   }
@@ -40,25 +55,80 @@ class AngelAPI {
   }
 
   public async authenticate(): Promise<boolean> {
-    logger.info('Authenticating with Angel One API - Real trading mode only');
+    return new Promise((resolve, reject) => {
+      this.authRetryQueue.push({resolve, reject});
+      this.processAuthQueue();
+    });
+  }
+
+  private async processAuthQueue(): Promise<void> {
+    if (this.isAuthenticating) return;
+
+    this.isAuthenticating = true;
+
+    try {
+      const success = await this.authenticateWithRetry();
+
+      // Resolve all queued requests
+      this.authRetryQueue.forEach(({resolve}) => resolve(success));
+      this.authRetryQueue = [];
+
+    } catch (error) {
+      // Reject all queued requests
+      this.authRetryQueue.forEach(({reject}) => reject(error));
+      this.authRetryQueue = [];
+
+    } finally {
+      this.isAuthenticating = false;
+    }
+  }
+
+  private async authenticateWithRetry(): Promise<boolean> {
+    logger.info('🔐 Enhanced authentication with Angel One API starting...');
+
+    // Check if we're in cooldown period after failures
+    if (this.authFailureCount >= this.MAX_AUTH_FAILURES) {
+      const timeSinceLastAttempt = Date.now() - this.lastAuthAttempt;
+      if (timeSinceLastAttempt < this.AUTH_COOLDOWN) {
+        const remainingCooldown = Math.ceil((this.AUTH_COOLDOWN - timeSinceLastAttempt) / 1000);
+        throw new Error(`Authentication in cooldown. Try again in ${remainingCooldown} seconds`);
+      } else {
+        // Reset failure count after cooldown
+        this.authFailureCount = 0;
+        logger.info('🔄 Authentication cooldown period ended, resetting failure count');
+      }
+    }
 
     // Validate configuration before attempting authentication
     if (!this.validateConfig()) {
-      logger.error('CRITICAL: Angel API configuration is incomplete - cannot proceed without valid credentials');
+      logger.error('CRITICAL: Angel API configuration is incomplete');
       throw new Error('Angel One API configuration required');
     }
 
     try {
-      // Try loading existing tokens
+      // Try loading existing tokens first
       if (await this.loadStoredTokens()) {
+        logger.info('✅ Using cached authentication tokens');
+        this.authFailureCount = 0; // Reset on success
         return true;
       }
 
-      // Generate fresh session
-      return await this.freshLogin();
+      // Attempt fresh login with exponential backoff
+      const success = await this.freshLoginWithRetry();
+
+      if (success) {
+        this.authFailureCount = 0; // Reset on success
+        logger.info('✅ Fresh authentication successful');
+        return true;
+      }
+
+      throw new Error('Authentication failed after all retries');
 
     } catch (error) {
-      logger.error('CRITICAL: Angel authentication failed:', (error as Error).message);
+      this.lastAuthAttempt = Date.now();
+      this.authFailureCount++;
+
+      logger.error(`CRITICAL: Angel authentication failed (attempt ${this.authFailureCount}/${this.MAX_AUTH_FAILURES}):`, (error as Error).message);
 
       // Provide specific guidance based on error type
       if ((error as Error).message.includes('Invalid Token') ||
@@ -70,9 +140,38 @@ class AngelAPI {
         logger.error('Please verify your credentials with Angel Broking');
       }
 
-      logger.error('CRITICAL: Cannot proceed without valid Angel One authentication');
+      if (this.authFailureCount >= this.MAX_AUTH_FAILURES) {
+        logger.error(`🚨 Maximum authentication failures reached. Entering cooldown for ${this.AUTH_COOLDOWN/1000} seconds`);
+      }
+
       throw error;
     }
+  }
+
+  private async freshLoginWithRetry(maxRetries: number = 3): Promise<boolean> {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        logger.info(`🔐 Fresh login attempt ${attempt}/${maxRetries}...`);
+        return await this.freshLogin();
+
+      } catch (error) {
+        const isLastAttempt = attempt === maxRetries;
+
+        if (isLastAttempt) {
+          logger.error(`❌ Fresh login failed after ${maxRetries} attempts`);
+          throw error;
+        }
+
+        // Calculate exponential backoff delay
+        const baseDelay = 2000; // 2 seconds
+        const delay = Math.min(baseDelay * Math.pow(2, attempt - 1), 30000); // Max 30 seconds
+
+        logger.warn(`⏳ Fresh login attempt ${attempt} failed, retrying in ${delay}ms: ${(error as Error).message}`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+
+    return false;
   }
 
   private validateConfig(): boolean {
@@ -202,94 +301,190 @@ class AngelAPI {
   public async makeRequest(
     endpoint: string,
     method: 'GET' | 'POST' = 'GET',
-    data: any = null
+    data: any = null,
+    retryCount: number = 0
   ): Promise<any> {
-    if (!this.isAuthenticated) {
-      throw new Error('Not authenticated');
+    const maxRetries = 3;
+
+    if (!this.isAuthenticated && retryCount === 0) {
+      logger.info('🔐 Not authenticated, attempting authentication...');
+      await this.authenticate();
     }
 
+    if (!this.isAuthenticated) {
+      throw new Error('Authentication failed - cannot make API request');
+    }
+
+    // ✅ FIXED: Dynamic IP resolution and proper headers
     const headers = {
       'Content-Type': 'application/json',
       'Accept': 'application/json',
       'X-UserType': 'USER',
       'X-SourceID': 'WEB',
-      'X-ClientLocalIP': this.getLocalIP(),      // Get actual local IP
-      'X-ClientPublicIP': this.getPublicIP(),    // Get actual public IP  
-      'X-MACAddress': this.getMACAddress(),      // Get actual MAC
+      'X-ClientLocalIP': await this.getActualLocalIP(),
+      'X-ClientPublicIP': await this.getActualPublicIP(),
+      'X-MACAddress': this.getActualMACAddress(),
       'X-PrivateKey': config.angel.apiKey,
       'Authorization': `Bearer ${this._jwtToken}`
     };
 
     try {
+      logger.debug(`📡 API Request: ${method} ${endpoint}`);
 
       const response = await axios({
         method,
         url: `${this.baseURL}${endpoint}`,
         headers,
         data,
-        timeout: 30000  // 30 second timeout
+        timeout: 30000
       });
 
+      // ✅ FIXED: Validate response structure
+      if (!response.data) {
+        throw new Error('Empty response from Angel API');
+      }
+
+      // Log successful response
+      logger.debug(`✅ API Response: ${endpoint} - Status: ${response.data.status}`);
       return response.data;
+
     } catch (error) {
       if (axios.isAxiosError(error)) {
+        const statusCode = error.response?.status;
+        const errorData = error.response?.data;
+
         logger.error('❌ API Error:', {
-          status: error.response?.status,
+          endpoint,
+          status: statusCode,
           statusText: error.response?.statusText,
-          data: error.response?.data,
-          endpoint: endpoint
+          data: errorData,
+          message: error.message
         });
 
-        if (error.response?.status === 401) {
+        // ✅ FIXED: Enhanced error handling with automatic token refresh
+        if (statusCode === 401 || (errorData && errorData.message && errorData.message.includes('Invalid Token'))) {
+          logger.warn('🔐 Token expired, attempting to refresh...');
           this.isAuthenticated = false;
-          if (await this.authenticate()) {
-            return this.makeRequest(endpoint, method, data);
+
+          if (retryCount < maxRetries) {
+            logger.info(`🔄 Retrying authentication (attempt ${retryCount + 1}/${maxRetries})...`);
+            await this.authenticate();
+            return this.makeRequest(endpoint, method, data, retryCount + 1);
+          } else {
+            throw new Error(`Authentication failed after ${maxRetries} attempts`);
           }
         }
+
+        // ✅ FIXED: Proper error propagation with Angel-specific error codes
+        if (errorData && errorData.errorcode) {
+          throw new Error(`Angel API Error ${errorData.errorcode}: ${errorData.message || 'Unknown error'}`);
+        }
       }
+
+      // ✅ FIXED: Retry logic for network errors
+      if (retryCount < maxRetries && (error as Error).message.includes('timeout')) {
+        logger.warn(`⏱️ Request timeout, retrying (${retryCount + 1}/${maxRetries})...`);
+        await new Promise(resolve => setTimeout(resolve, 1000 * (retryCount + 1))); // Progressive delay
+        return this.makeRequest(endpoint, method, data, retryCount + 1);
+      }
+
       throw error;
     }
   }
 
-  // Helper methods to get actual network info
-  private getLocalIP(): string {
-    // For Node.js environment
-    const os = require('os');
-    const networkInterfaces = os.networkInterfaces();
+  // ✅ FIXED: Enhanced network info methods with proper async support
+  private async getActualLocalIP(): Promise<string> {
+    try {
+      const os = require('os');
+      const networkInterfaces = os.networkInterfaces();
 
-    for (const interfaceName of Object.keys(networkInterfaces)) {
-      const networkInterface = networkInterfaces[interfaceName];
-      for (const network of networkInterface || []) {
-        if (network.family === 'IPv4' && !network.internal) {
-          return network.address;
+      for (const interfaceName of Object.keys(networkInterfaces)) {
+        const networkInterface = networkInterfaces[interfaceName];
+        for (const network of networkInterface || []) {
+          if (network.family === 'IPv4' && !network.internal && network.address !== '127.0.0.1') {
+            logger.debug(`🌐 Using local IP: ${network.address} (${interfaceName})`);
+            return network.address;
+          }
         }
       }
+
+      logger.warn('⚠️ No external network interface found, using fallback IP');
+      return '192.168.1.100'; // Fallback
+    } catch (error) {
+      logger.error('Failed to get local IP:', (error as Error).message);
+      return '192.168.1.100';
     }
-
-    return '192.168.1.100'; // Fallback
   }
 
-  private getPublicIP(): string {
-    // You might want to fetch this from an external service
-    // For now, use a placeholder that's different from local IP
-    return '203.192.1.100';
+  private async getActualPublicIP(): Promise<string> {
+    try {
+      // ✅ FIXED: Try to get actual public IP from reliable service
+      const response = await axios.get('https://api.ipify.org?format=json', {
+        timeout: 5000,
+        headers: { 'User-Agent': 'TradingBot/1.0' }
+      });
+
+      if (response.data && response.data.ip) {
+        logger.debug(`🌐 Using public IP: ${response.data.ip}`);
+        return response.data.ip;
+      }
+
+      throw new Error('Invalid response from IP service');
+    } catch (error) {
+      logger.warn(`⚠️ Failed to get public IP: ${(error as Error).message}, using fallback`);
+      // Use local IP as fallback - Angel One may accept this
+      return await this.getActualLocalIP();
+    }
   }
 
-  private getMACAddress(): string {
-    // Get actual MAC address
-    const os = require('os');
-    const networkInterfaces = os.networkInterfaces();
+  private getActualMACAddress(): string {
+    try {
+      const os = require('os');
+      const networkInterfaces = os.networkInterfaces();
 
-    for (const interfaceName of Object.keys(networkInterfaces)) {
-      const networkInterface = networkInterfaces[interfaceName];
-      for (const network of networkInterface || []) {
-        if (network.family === 'IPv4' && !network.internal && network.mac !== '00:00:00:00:00:00') {
-          return network.mac.toUpperCase();
+      for (const interfaceName of Object.keys(networkInterfaces)) {
+        const networkInterface = networkInterfaces[interfaceName];
+        if (!networkInterface) continue;
+
+        for (const network of networkInterface) {
+          if (network.family === 'IPv4' &&
+              !network.internal &&
+              network.mac &&
+              network.mac !== '00:00:00:00:00:00') {
+            const macAddress = network.mac.toUpperCase().replace(/:/g, ':');
+            logger.debug(`🌐 Using MAC address: ${macAddress} (${interfaceName})`);
+            return macAddress;
+          }
         }
       }
-    }
 
-    return 'AA:BB:CC:DD:EE:FF'; // Fallback
+      logger.warn('⚠️ No valid MAC address found, using fallback');
+      return 'AA:BB:CC:DD:EE:FF'; // Fallback
+    } catch (error) {
+      logger.error('Failed to get MAC address:', (error as Error).message);
+      return 'AA:BB:CC:DD:EE:FF';
+    }
+  }
+
+  // ✅ ADDED: Automatic token refresh mechanism
+  private async refreshTokenIfNeeded(): Promise<void> {
+    if (!this._jwtToken) return;
+
+    try {
+      // Check if tokens are stored and their age
+      if (fs.existsSync(this.tokensFile)) {
+        const tokens = JSON.parse(fs.readFileSync(this.tokensFile, 'utf8'));
+        const tokenAge = Date.now() - tokens.timestamp;
+        const maxAge = 18 * 60 * 60 * 1000; // 18 hours (refresh before 24h expiry)
+
+        if (tokenAge > maxAge) {
+          logger.info('🔄 Token approaching expiry, refreshing...');
+          await this.authenticate();
+        }
+      }
+    } catch (error) {
+      logger.warn('Token refresh check failed:', (error as Error).message);
+    }
   }
 
 
@@ -464,6 +659,7 @@ class AngelAPI {
     }
   }
 
+  // ✅ ENHANCED: Cached option token resolution with robust fallbacks
   public async getOptionToken(
     indexName: string,
     strike: number,
@@ -471,102 +667,352 @@ class AngelAPI {
     expiry: string
   ): Promise<string | null> {
     try {
-      // ✅ Format expiry correctly (DDMMMYY format like 12SEP24)
-      const formattedExpiry = this.formatExpiryDate(expiry);
+      // ✅ STEP 1: Check cache first
+      const cacheKey = `${indexName}-${strike}-${optionType}-${expiry}`;
+      const cachedToken = this.getTokenFromCache(cacheKey);
 
-      // ✅ Use correct symbol naming based on research
-      let baseSymbol = indexName;
-      if (indexName === 'BANKNIFTY') {
-        baseSymbol = 'BANKNIFTY'; // Keep as BANKNIFTY for options
-      } else if (indexName === 'NIFTY') {
-        baseSymbol = 'NIFTY'; // Keep as NIFTY for options
+      if (cachedToken) {
+        logger.info(`✅ Using cached token: ${cachedToken} for ${indexName} ${strike} ${optionType}`);
+        return cachedToken;
       }
 
-      // ✅ Build symbol with correct format: BASEEXPIRYSTRIKETYPE
-      const symbol = `${baseSymbol}${formattedExpiry}${strike}${optionType}`;
-      const exchange = 'NFO';
+      logger.info(`🔍 Starting fresh option token lookup: ${indexName} ${strike} ${optionType} ${expiry}`);
 
-      logger.info(`🔍 Searching for option token: ${symbol} on ${exchange}`);
+      // ✅ STEP 2: Get current expiries with caching
+      const availableExpiries = await this.getCurrentExpiriesCached(indexName as 'NIFTY' | 'BANKNIFTY');
+      logger.info(`📅 Available expiries for ${indexName}: ${availableExpiries.join(', ')}`);
 
-      // First try direct search with constructed symbol
-      let response = await this.searchScrips(exchange, symbol).catch(async (error) => {
-        logger.warn(`Primary search failed, trying fallback: ${error.message}`);
-        return await this.searchScripsViaManual(exchange, symbol);
-      });
-
-      logger.info(`📋 Angel API search response:`, {
-        status: response?.status,
-        message: response?.message,
-        dataCount: response?.data?.length || 0,
-        searchSymbol: symbol
-      });
-
-      if (response?.data && response.data.length > 0) {
-        // Look for exact match first
-        const exactMatch = response.data.find((option: any) =>
-          option.tradingsymbol === symbol
-        );
-
-        if (exactMatch) {
-          logger.info(`✅ Exact token match: ${exactMatch.symboltoken} for symbol: ${exactMatch.tradingsymbol}`);
-          return exactMatch.symboltoken;
+      // ✅ STEP 3: Use the closest available expiry if provided expiry doesn't exist
+      let targetExpiry = expiry;
+      if (!availableExpiries.includes(expiry)) {
+        if (availableExpiries.length > 0) {
+          targetExpiry = availableExpiries[0]; // Use nearest expiry
+          logger.warn(`⚠️ Requested expiry ${expiry} not available, using ${targetExpiry}`);
+        } else {
+          logger.error(`❌ No expiries available for ${indexName}`);
+          return null;
         }
-
-        // If no exact match, take first result
-        const token = response.data[0].symboltoken;
-        const foundSymbol = response.data[0].tradingsymbol;
-        logger.info(`⚠️ Using closest match: ${token} for symbol: ${foundSymbol} (searched: ${symbol})`);
-        return token;
       }
 
-      // ✅ Enhanced fallback - try different symbol variations
-      logger.warn(`❌ Direct search failed for: ${symbol}, trying variations...`);
-
-      // Try variations of the symbol format
-      const variations = [
-        `${baseSymbol} ${formattedExpiry} ${strike} ${optionType}`, // With spaces
-        `${baseSymbol}${formattedExpiry.replace(/(\d{2})(\w{3})(\d{2})/, '$1$2$3')}${strike}${optionType}`, // Standard format
-        `${baseSymbol}${formattedExpiry.replace(/(\d{2})(\w{3})(\d{2})/, '$2$1$3')}${strike}${optionType}`, // Month first
+      // ✅ STEP 4: Try multiple resolution strategies with caching
+      const strategies = [
+        () => this.getOptionTokenFromMasterCached(indexName, targetExpiry, strike, optionType),
+        () => this.searchMultipleOptionFormatsWithCache(indexName, strike, optionType, targetExpiry),
+        () => this.findNearbyStrikeTokenCached(indexName, strike, optionType, targetExpiry)
       ];
 
-      for (const variation of variations) {
+      for (const [index, strategy] of strategies.entries()) {
         try {
-          const varResponse = await this.searchScrips(exchange, variation).catch(async (error) => {
-            logger.debug(`Variation "${variation}" search failed, trying manual: ${error.message}`);
-            return await this.searchScripsViaManual(exchange, variation);
-          });
-          if (varResponse?.data && varResponse.data.length > 0) {
-            const match = varResponse.data.find((option: any) =>
-              option.tradingsymbol.includes(strike.toString()) &&
-              option.tradingsymbol.includes(optionType) &&
-              option.tradingsymbol.includes(baseSymbol)
-            );
+          const result = await strategy();
+          if (result) {
+            const strategyNames = ['Master Data', 'API Search', 'Nearby Strike'];
+            logger.info(`✅ Token found via ${strategyNames[index]}: ${result}`);
 
-            if (match) {
-              logger.info(`✅ Found via variation "${variation}": ${match.symboltoken} for ${match.tradingsymbol}`);
-              return match.symboltoken;
-            }
+            // Cache the successful result
+            this.cacheToken(cacheKey, result, targetExpiry, strike, optionType || 'CE');
+            return result;
           }
-        } catch (err) {
-          logger.debug(`Variation "${variation}" failed: ${(err as Error).message}`);
+        } catch (strategyError) {
+          logger.debug(`Strategy ${index + 1} failed: ${(strategyError as Error).message}`);
         }
       }
 
-      // ✅ Final fallback - search master data directly
-      logger.info(`🔄 Trying master data file search for ${baseSymbol} options...`);
-      const masterToken = await this.getOptionTokenFromMaster(baseSymbol, formattedExpiry, strike, optionType);
-      if (masterToken) {
-        return masterToken;
-      }
-
-      logger.error(`CRITICAL: Could not find token for option: ${symbol}`);
-      logger.error(`Available expiry formats might be different. Check current expiries for ${baseSymbol}.`);
+      logger.error(`❌ CRITICAL: All token lookup strategies failed for ${indexName} ${strike} ${optionType} ${targetExpiry}`);
       return null;
 
     } catch (error) {
-      logger.error(`CRITICAL: Failed to get option token for ${indexName}:`, (error as Error).message);
+      logger.error(`❌ Option token lookup failed for ${indexName}:`, (error as Error).message);
       return null;
     }
+  }
+
+  // Cache management methods
+  private getTokenFromCache(cacheKey: string): string | null {
+    const cached = this.optionTokenCache.get(cacheKey);
+    if (cached && Date.now() < cached.expiry) {
+      return cached.token;
+    }
+
+    if (cached && Date.now() >= cached.expiry) {
+      this.optionTokenCache.delete(cacheKey);
+    }
+
+    return null;
+  }
+
+  private cacheToken(cacheKey: string, token: string, expiry: string, strike: number, optionType: string): void {
+    const expiryTime = Date.now() + this.CACHE_DURATION;
+    this.optionTokenCache.set(cacheKey, {
+      token,
+      expiry: expiryTime,
+      strike,
+      type: optionType
+    });
+
+    logger.debug(`📦 Cached option token: ${cacheKey} -> ${token}`);
+  }
+
+  // Enhanced master data with caching
+  private async getMasterDataCached(): Promise<any[]> {
+    if (this.masterDataCache && Date.now() < this.masterDataExpiry) {
+      logger.debug('📦 Using cached master data');
+      return this.masterDataCache;
+    }
+
+    try {
+      logger.info('📋 Fetching fresh master data from Angel One...');
+      const response = await axios.get('https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json', {
+        timeout: 30000,
+        headers: {
+          'User-Agent': 'TradingBot/1.0'
+        }
+      });
+
+      this.masterDataCache = response.data;
+      this.masterDataExpiry = Date.now() + this.MASTER_DATA_DURATION;
+
+      logger.info(`✅ Master data cached: ${this.masterDataCache?.length || 0} instruments`);
+      return this.masterDataCache || [];
+
+    } catch (error) {
+      logger.error('❌ Failed to fetch master data:', (error as Error).message);
+
+      // Return stale cache if available
+      if (this.masterDataCache) {
+        logger.warn('⚠️ Using stale master data cache');
+        return this.masterDataCache;
+      }
+
+      throw error;
+    }
+  }
+
+  private async getCurrentExpiriesCached(indexName: 'NIFTY' | 'BANKNIFTY'): Promise<string[]> {
+    try {
+      const masterData = await this.getMasterDataCached();
+
+      // Filter for current options
+      const options = masterData.filter((item: any) => {
+        return item.exch_seg === 'NFO' &&
+          item.name &&
+          item.name.includes(indexName) &&
+          item.instrumenttype === 'OPTIDX';
+      });
+
+      // Extract unique expiries and sort them
+      const expiries = [...new Set(options.map((item: any) => {
+        const match = item.name.match(/(\d{2}[A-Z]{3}\d{2})/);
+        return match ? match[1] : null;
+      }).filter(Boolean))].sort();
+
+      logger.info(`📅 Cached expiries for ${indexName}: ${expiries.join(', ')}`);
+      return expiries as string[];
+
+    } catch (error) {
+      logger.error(`Failed to get cached expiries for ${indexName}:`, (error as Error).message);
+      return await this.getCurrentExpiries(indexName); // Fallback to non-cached
+    }
+  }
+
+  private async getOptionTokenFromMasterCached(
+    baseSymbol: string,
+    expiry: string,
+    strike: number,
+    optionType: 'CE' | 'PE' | undefined
+  ): Promise<string | null> {
+    try {
+      const masterData = await this.getMasterDataCached();
+
+      // Filter for the specific option
+      const options = masterData.filter((item: any) => {
+        return item.exch_seg === 'NFO' &&
+          item.name &&
+          item.name.includes(baseSymbol) &&
+          item.instrumenttype === 'OPTIDX' &&
+          item.name.includes(expiry) &&
+          item.name.includes(strike.toString()) &&
+          item.name.includes(optionType || '');
+      });
+
+      if (options.length > 0) {
+        const option = options[0];
+        logger.info(`✅ Found in cached master data: Token=${option.token}, Name=${option.name}`);
+        return option.token;
+      }
+
+      return null;
+
+    } catch (error) {
+      logger.error(`Cached master data search failed:`, (error as Error).message);
+      return await this.getOptionTokenFromMaster(baseSymbol, expiry, strike, optionType);
+    }
+  }
+
+  private async searchMultipleOptionFormatsWithCache(
+    indexName: string,
+    strike: number,
+    optionType: 'CE' | 'PE' | undefined,
+    expiry: string
+  ): Promise<string | null> {
+    const searchResults = await this.searchMultipleOptionFormats(indexName, strike, optionType, expiry);
+
+    if (searchResults && searchResults.length > 0) {
+      const bestMatch = this.findBestOptionMatch(searchResults, indexName, strike, optionType, expiry);
+      return bestMatch?.symboltoken || null;
+    }
+
+    return null;
+  }
+
+  private async findNearbyStrikeTokenCached(
+    indexName: string,
+    targetStrike: number,
+    optionType: 'CE' | 'PE' | undefined,
+    expiry: string
+  ): Promise<string | null> {
+    return await this.findNearbyStrikeToken(indexName, targetStrike, optionType, expiry);
+  }
+
+  // Cache cleanup method
+  public clearExpiredTokens(): void {
+    const now = Date.now();
+    let cleanedCount = 0;
+
+    for (const [key, cached] of this.optionTokenCache.entries()) {
+      if (now >= cached.expiry) {
+        this.optionTokenCache.delete(key);
+        cleanedCount++;
+      }
+    }
+
+    if (cleanedCount > 0) {
+      logger.info(`🧹 Cleaned ${cleanedCount} expired option tokens from cache`);
+    }
+  }
+
+  // ✅ ADDED: Search multiple option symbol formats
+  private async searchMultipleOptionFormats(
+    indexName: string,
+    strike: number,
+    optionType: 'CE' | 'PE' | undefined,
+    expiry: string
+  ): Promise<any[]> {
+    const exchange = 'NFO';
+    const allResults: any[] = [];
+
+    // Generate multiple symbol format variations
+    const symbolFormats = [
+      `${indexName}${expiry}${strike}${optionType}`,           // NIFTY12SEP2425000CE
+      `${indexName} ${expiry} ${strike} ${optionType}`,        // NIFTY 12SEP24 25000 CE
+      `${indexName}${expiry.replace(/(\d{2})(\w{3})(\d{2})/, '$1-$2-$3')}${strike}${optionType}`, // Date variations
+      `${indexName}_${expiry}_${strike}_${optionType}`,        // Underscore format
+      `${indexName}${expiry}C${strike}`,                       // Simplified CE format (only for CE)
+      `${indexName}${expiry}P${strike}`,                       // Simplified PE format (only for PE)
+    ];
+
+    logger.info(`🔍 Trying ${symbolFormats.length} symbol format variations...`);
+
+    for (const symbolFormat of symbolFormats) {
+      try {
+        logger.debug(`   Searching: ${symbolFormat}`);
+
+        const response = await this.searchScrips(exchange, symbolFormat).catch(async (error) => {
+          // Fallback to manual search
+          return await this.searchScripsViaManual(exchange, symbolFormat);
+        });
+
+        if (response?.data && Array.isArray(response.data) && response.data.length > 0) {
+          logger.info(`✅ Found ${response.data.length} matches for format: ${symbolFormat}`);
+          allResults.push(...response.data);
+        }
+      } catch (error) {
+        logger.debug(`   Search failed for format ${symbolFormat}: ${(error as Error).message}`);
+      }
+    }
+
+    // Remove duplicates based on symbol token
+    const uniqueResults = allResults.filter((result, index, self) =>
+      index === self.findIndex(r => r.symboltoken === result.symboltoken)
+    );
+
+    logger.info(`📊 Total unique options found: ${uniqueResults.length}`);
+    return uniqueResults;
+  }
+
+  // ✅ ADDED: Find best matching option from search results
+  private findBestOptionMatch(
+    results: any[],
+    indexName: string,
+    strike: number,
+    optionType: 'CE' | 'PE' | undefined,
+    expiry: string
+  ): any | null {
+    if (!results || results.length === 0) return null;
+
+    // Score each result based on match quality
+    const scoredResults = results.map(result => {
+      let score = 0;
+      const symbol = result.tradingsymbol || result.symbol || '';
+
+      // Perfect symbol match
+      if (symbol === `${indexName}${expiry}${strike}${optionType}`) {
+        score += 100;
+      }
+
+      // Component matches
+      if (symbol.includes(indexName)) score += 30;
+      if (symbol.includes(expiry)) score += 25;
+      if (symbol.includes(strike.toString())) score += 25;
+      if (symbol.includes(optionType || '')) score += 20;
+
+      // Exchange match
+      if (result.exchange === 'NFO') score += 10;
+
+      return { ...result, matchScore: score };
+    });
+
+    // Sort by match score (highest first)
+    scoredResults.sort((a, b) => b.matchScore - a.matchScore);
+
+    const bestMatch = scoredResults[0];
+    if (bestMatch && bestMatch.matchScore >= 70) { // Require minimum 70% match
+      logger.info(`🎯 Best match: ${bestMatch.tradingsymbol} (Score: ${bestMatch.matchScore})`);
+      return bestMatch;
+    }
+
+    logger.warn(`⚠️ No good matches found (best score: ${bestMatch?.matchScore || 0})`);
+    return null;
+  }
+
+  // ✅ ADDED: Find nearby strike tokens as fallback
+  private async findNearbyStrikeToken(
+    indexName: string,
+    targetStrike: number,
+    optionType: 'CE' | 'PE' | undefined,
+    expiry: string
+  ): Promise<string | null> {
+    const strikeInterval = indexName === 'BANKNIFTY' ? 500 : 50;
+    const searchRange = 5; // Check 5 strikes above and below
+
+    for (let i = 1; i <= searchRange; i++) {
+      // Try strikes both above and below target
+      const strikeAbove = targetStrike + (i * strikeInterval);
+      const strikeBelow = targetStrike - (i * strikeInterval);
+
+      for (const strike of [strikeAbove, strikeBelow]) {
+        try {
+          const token = await this.getOptionTokenFromMaster(indexName, expiry, strike, optionType);
+          if (token) {
+            logger.info(`✅ Found nearby strike: ${strike} (target was ${targetStrike})`);
+            return token;
+          }
+        } catch (error) {
+          // Continue searching
+        }
+      }
+    }
+
+    return null;
   }
 
   // ✅ Helper method to format expiry date correctly

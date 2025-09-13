@@ -7,7 +7,7 @@
         "start": "node dist/app.js",
         "start:ts": "ts-node src/app.ts",
         "dev": "nodemon --exec ts-node src/app.ts",
-        "build": "npm run kill-bot && npm run clean && tsc",
+        "build": "npm run clean && tsc",
         "kill-bot": "taskkill /F /IM node.exe 2>nul || echo No Node.js processes found",
         "rebuild": "npm run build && npm start",
         "build:watch": "tsc --watch",

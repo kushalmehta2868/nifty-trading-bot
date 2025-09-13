@@ -70,7 +70,8 @@
       "Read(/C:\\Users\\Asus\\Desktop\\trading-bot\\src\\services/**)",
       "Read(/C:\\Users\\Asus\\Desktop\\trading-bot\\src\\services/**)",
       "Read(/C:\\Users\\Asus\\Desktop\\trading-bot\\src\\services/**)",
-      "Read(/C:\\Users\\Asus\\Desktop\\trading-bot\\src\\services/**)"
+      "Read(/C:\\Users\\Asus\\Desktop\\trading-bot\\src\\services/**)",
+      "Bash(git add:*)"
     ],
     "deny": [],
     "ask": []

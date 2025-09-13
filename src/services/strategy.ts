@@ -9,6 +9,7 @@ import { logger } from '../utils/logger';
 import { isMarketOpen } from '../utils/marketHours';
 import { angelAPI } from './angelAPI';
 import { webSocketFeed } from './webSocketFeed';
+import { signalProcessingMutex, positionManagementMutex } from '../utils/mutex';
 
 interface PriceBufferItem {
   price: number;
@@ -187,85 +188,155 @@ class TradingStrategy {
   }
 
 
+  // ✅ ENHANCED: Mutex-based tick processing with timeout handling
   async processTick(indexName: IndexName, priceUpdate: PriceUpdate): Promise<void> {
-    // Skip if market is closed
-    if (!isMarketOpen()) {
-      const shouldLog = Date.now() % 30000 < 1000; // Log every 30 seconds
-      if (shouldLog) {
-        logger.info(`🔒 ${indexName} - Market closed, skipping analysis`);
+    try {
+      await signalProcessingMutex.acquire(async () => {
+        return this.processTickInternal(indexName, priceUpdate);
+      }, 10000); // 10 second timeout
+
+    } catch (error) {
+      if ((error as Error).message.includes('timeout')) {
+        logger.error(`⚡ ${indexName} - Tick processing timeout, skipping to prevent bottleneck`);
+      } else {
+        logger.error(`⚡ ${indexName} - Tick processing error:`, (error as Error).message);
       }
-      return;
     }
+  }
 
-    // No cooldown check here - will be checked per signal type in analyzeSignal
+  private async processTickInternal(indexName: IndexName, priceUpdate: PriceUpdate): Promise<void> {
+    try {
 
-    // Update price buffer - volume data removed as it's unreliable for indices
-    const buffer = this.priceBuffers[indexName];
-    if (!buffer) {
-      logger.error(`Price buffer not initialized for ${indexName}`);
-      return;
-    }
-
-    buffer.push({
-      price: priceUpdate.price,
-      timestamp: priceUpdate.timestamp
-    });
-
-    // Keep only last 50 ticks for analysis
-    if (buffer.length > 50) {
-      buffer.shift();
-    }
-
-    // Need enough data for analysis
-    if (buffer.length < config.strategy.emaPeriod) {
-      const shouldLog = Date.now() % 30000 < 1000; // Log every 30 seconds
-      if (shouldLog) {
-        logger.info(`📊 ${indexName} - Insufficient data: ${buffer.length}/${config.strategy.emaPeriod} required for analysis`);
+      // Skip if market is closed
+      if (!isMarketOpen()) {
+        const shouldLog = Date.now() % 30000 < 1000;
+        if (shouldLog) {
+          logger.info(`🔒 ${indexName} - Market closed, skipping analysis`);
+        }
+        return;
       }
-      return;
-    }
 
-    // Analyze for signals
-    const signal = await this.analyzeSignal(indexName, priceUpdate.price, buffer);
-
-    if (signal && signal.confidence >= config.strategy.confidenceThreshold) {
-      // ✅ CRITICAL FIX: Multi-layer duplicate prevention
-      const signalKey = indexName; // Use index name for tracking
-
-      // Check 1: Active position blocking (most important)
+      // ✅ CRITICAL: Early exit if position is locked (before any processing)
       if (this.activePositions[indexName]) {
-        logger.info(`🔒 ${indexName} - Position already active, blocking ${signal.optionType} signal`);
-        this.logActivePositionsStatus('SIGNAL_BLOCKED');
+        const shouldLog = Date.now() % 10000 < 1000; // Log every 10 seconds
+        if (shouldLog) {
+          logger.info(`🔒 ${indexName} - Position locked, skipping tick processing`);
+        }
         return;
       }
 
-      // Check 2: Recent signal cooldown (prevents rapid-fire signals)
+      // Update price buffer atomically
+      const buffer = this.priceBuffers[indexName];
+      if (!buffer) {
+        logger.error(`❌ Price buffer not initialized for ${indexName}`);
+        return;
+      }
+
+      // ✅ ATOMIC BUFFER UPDATE
+      buffer.push({
+        price: priceUpdate.price,
+        timestamp: priceUpdate.timestamp
+      });
+
+      // Keep only last 50 ticks for analysis
+      if (buffer.length > 50) {
+        buffer.shift();
+      }
+
+      // Need enough data for analysis
+      if (buffer.length < config.strategy.emaPeriod) {
+        const shouldLog = Date.now() % 30000 < 1000;
+        if (shouldLog) {
+          logger.info(`📊 ${indexName} - Insufficient data: ${buffer.length}/${config.strategy.emaPeriod} required`);
+        }
+        return;
+      }
+
+      // ✅ CRITICAL: Double-check position lock after data processing
+      if (this.activePositions[indexName]) {
+        logger.debug(`🔒 ${indexName} - Position locked during processing, aborting signal analysis`);
+        return;
+      }
+
+      // Analyze for signals
+      const signal = await this.analyzeSignal(indexName, priceUpdate.price, buffer);
+
+      if (signal && signal.confidence >= config.strategy.confidenceThreshold) {
+        await this.processValidSignal(signal, indexName);
+      } else if (signal && signal.confidence < config.strategy.confidenceThreshold) {
+        logger.info(`⚠️ ${indexName} - Low confidence: ${signal.confidence.toFixed(1)}% < ${config.strategy.confidenceThreshold}%`);
+      }
+
+    } catch (error) {
+      logger.error(`❌ ${indexName} - Internal tick processing failed:`, (error as Error).message);
+      throw error; // Re-throw to be caught by mutex handler
+    }
+  }
+
+  // ✅ ENHANCED: Mutex-based signal processing method
+  private async processValidSignal(signal: TradingSignal, indexName: IndexName): Promise<void> {
+    try {
+      await positionManagementMutex.acquire(async () => {
+        return this.processValidSignalInternal(signal, indexName);
+      }, 15000); // 15 second timeout for position management
+
+    } catch (error) {
+      if ((error as Error).message.includes('timeout')) {
+        logger.error(`⚡ ${indexName} - Signal processing timeout, may have missed opportunity`);
+      } else {
+        logger.error(`⚡ ${indexName} - Signal processing error:`, (error as Error).message);
+      }
+    }
+  }
+
+  private async processValidSignalInternal(signal: TradingSignal, indexName: IndexName): Promise<void> {
+    const signalKey = indexName;
+
+    try {
+
+      // ✅ CRITICAL: Final validation before position locking
+      if (this.activePositions[indexName]) {
+        logger.info(`🔒 ${indexName} - Position became active during signal validation, aborting`);
+        return;
+      }
+
       if (this.isSignalInCooldown(signalKey)) {
-        const cooldownRemaining = Math.ceil((config.trading.signalCooldown - (Date.now() - (this.lastSignalTime[signalKey] || 0))) / 1000);
-        const cooldownMinutes = Math.floor(cooldownRemaining / 60);
-        const cooldownSeconds = cooldownRemaining % 60;
-        logger.info(`⏳ ${indexName} - Signal cooldown ACTIVE: ${cooldownMinutes}m ${cooldownSeconds}s remaining (${cooldownRemaining}s total)`);
+        const remaining = Math.ceil((config.trading.signalCooldown - (Date.now() - (this.lastSignalTime[signalKey] || 0))) / 1000);
+        logger.info(`⏳ ${indexName} - Signal cooldown active: ${remaining}s remaining`);
         return;
       }
 
-      // ✅ RACE CONDITION FIX: Lock position IMMEDIATELY to prevent duplicate signals
+      // ✅ ATOMIC POSITION LOCKING: Single point of truth
+      logger.info(`🔒 LOCKING POSITION: ${indexName} - Preventing concurrent signals`);
       this.activePositions[indexName] = true;
-      logger.info(`🔒 IMMEDIATE LOCK: ${indexName} - blocking subsequent signals during processing`);
-      this.logActivePositionsStatus('SIGNAL_PROCESSING');
-
-      // ✅ CRITICAL: Set cooldown BEFORE executing signal to prevent race conditions
       this.lastSignalTime[signalKey] = Date.now();
 
-      this.executeSignal(signal).catch(error => {
-        logger.error('Failed to execute signal:', error.message);
-        // Reset cooldown and unlock position on failure to allow retry
-        delete this.lastSignalTime[signalKey];
+      logger.info(`🚨 SIGNAL CONFIRMED: ${indexName} ${signal.direction} - Confidence: ${signal.confidence.toFixed(0)}%`);
+      this.logActivePositionsStatus('SIGNAL_LOCKED');
+
+      // Execute signal with proper error handling
+      try {
+        await this.executeSignal(signal);
+      } catch (error) {
+        logger.error(`❌ Signal execution failed for ${indexName}:`, (error as Error).message);
+
+        // ✅ CRITICAL: Atomic unlock on failure
         this.activePositions[indexName] = false;
-        logger.info(`🔓 UNLOCKED after signal execution failure: ${indexName}`);
-        this.logActivePositionsStatus('SIGNAL_EXECUTION_FAILED');
-      });
-    } else if (signal && signal.confidence < config.strategy.confidenceThreshold) {
-      logger.info(`⚠️ ${indexName} - Signal generated but confidence too low: ${signal.confidence.toFixed(1)}% < ${config.strategy.confidenceThreshold}%`);
+        delete this.lastSignalTime[signalKey];
+
+        logger.info(`🔓 POSITION UNLOCKED after execution failure: ${indexName}`);
+        this.logActivePositionsStatus('EXECUTION_FAILED_UNLOCKED');
+
+        // Emit failure event for other services
+        (process as any).emit('signalExecutionFailed', {
+          signal,
+          reason: (error as Error).message
+        });
+      }
+
+    } catch (error) {
+      logger.error(`❌ ${indexName} - Critical error in signal processing:`, (error as Error).message);
+      throw error; // Re-throw to be caught by mutex handler
     }
   }
 

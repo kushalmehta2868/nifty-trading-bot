@@ -2,29 +2,88 @@ services:
   - type: web
     name: trading-bot
     runtime: node
-    plan: free
+    plan: starter  # ✅ UPGRADED: Free plan too limited for trading bot
     buildCommand: npm install && npm run build
     startCommand: npm start
     healthCheckPath: /health
     autoDeploy: false
+    # ✅ ADDED: Resource allocation for trading workload
+    region: oregon  # Lower latency to US markets
+    # ✅ ENHANCED: Environment variables with production values
     envVars:
       - key: NODE_ENV
         value: production
       - key: USE_WEBSOCKET
         value: true
       - key: AUTO_TRADE
-        value: false
+        value: false  # Keep disabled for safety
       - key: PAPER_TRADING
-        value: true
+        value: true   # Safe mode for testing
       - key: MAX_POSITIONS
-        value: 3
+        value: 2      # ✅ REDUCED: Safer for production
       - key: SIGNAL_COOLDOWN
-        value: 300000
+        value: 300000 # 5 minutes between signals
       - key: EMA_PERIOD
         value: 20
       - key: RSI_PERIOD
         value: 14
       - key: CONFIDENCE_THRESHOLD
-        value: 70
+        value: 75     # ✅ INCREASED: Higher quality signals
       - key: BREAKOUT_THRESHOLD
         value: 0.3
+      # ✅ ADDED: Production monitoring settings
+      - key: LOG_LEVEL
+        value: info   # Reduce log verbosity in production
+      - key: MAX_MEMORY_USAGE
+        value: 256    # MB limit for Render
+      - key: HEALTH_CHECK_INTERVAL
+        value: 30000  # 30 seconds
+      # ✅ ADDED: Angel One API settings
+      - key: API_RETRY_ATTEMPTS
+        value: 3
+      - key: API_TIMEOUT
+        value: 30000
+      - key: WEBSOCKET_RECONNECT_ATTEMPTS
+        value: 5
+      # ✅ CRITICAL: Missing production variables added
+      - key: SERVICE_NAME
+        value: trading-bot-primary
+      # Error Handling & Recovery
+      - key: MAX_RETRY_ATTEMPTS
+        value: 3
+      - key: RETRY_BACKOFF_MS
+        value: 2000
+      - key: MAX_AUTH_FAILURES
+        value: 5
+      - key: AUTH_COOLDOWN_MS
+        value: 300000
+      - key: WEBSOCKET_TIMEOUT_MS
+        value: 30000
+      # Memory & Performance Optimization
+      - key: CACHE_TTL_HOURS
+        value: 4
+      - key: MASTER_DATA_TTL_HOURS
+        value: 24
+      - key: MAX_PRICE_BUFFER_SIZE
+        value: 200
+      - key: CLEANUP_INTERVAL_MS
+        value: 3600000
+      - key: GC_INTERVAL_MS
+        value: 300000
+      # Monitoring & Alerting (add your keys)
+      - key: HEALTH_CHECK_INTERVAL_MS
+        value: 30000
+      - key: METRICS_ENABLED
+        value: true
+      # Security & Rate Limiting
+      - key: RATE_LIMIT_WINDOW_MS
+        value: 900000
+      - key: RATE_LIMIT_MAX_REQUESTS
+        value: 100
+      # External Service URLs (optional - add if using)
+      # - key: SENTRY_DSN
+      #   sync: false
+      # - key: DATADOG_API_KEY
+      #   sync: false
+      # - key: SLACK_WEBHOOK_URL
+      #   sync: false

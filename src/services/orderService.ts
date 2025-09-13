@@ -2,6 +2,7 @@ import { angelAPI } from './angelAPI';
 import { config } from '../config/config';
 import { logger } from '../utils/logger';
 import { TradingSignal, OrderDetails, OrderResponse, OptionType } from '../types';
+import { orderPlacementMutex } from '../utils/mutex';
 
 // Advanced Risk Management System
 class AdvancedRiskManager {
@@ -513,10 +514,10 @@ class OrderService {
         logger.info(`⏱️ PAPER TRADE COOLDOWN STARTED: ${signal.indexName} cooldown period activated (${config.trading.signalCooldown/1000}s)`);
         
       } else {
-        // Real Trading: Same calculations, with actual money execution
+        // Real Trading: Enhanced with retry logic
         logger.info('🎯 REAL ORDER: Executing with live money...');
-        
-        const orderResponse = await this.placeRealOrder(signal, optimalQuantity);
+
+        const orderResponse = await this.placeRealOrderWithRetry(signal, optimalQuantity);
 
         if (orderResponse.status && orderResponse.data?.orderid) {
           const newOrder: ActiveOrder = {
@@ -1841,6 +1842,104 @@ ${Object.keys(healthStatus).length === 0 ? '✅ All systems operational' :
     this.peakPnL = Math.max(this.peakPnL, this.dailyPnL);
     this.currentDrawdown = Math.max(0, (this.peakPnL - this.dailyPnL) / Math.max(this.peakPnL, 1000) * 100);
     this.maxDrawdown = Math.max(this.maxDrawdown, this.currentDrawdown);
+  }
+
+  // ✅ ENHANCED: Order execution retry logic
+  private async placeRealOrderWithRetry(signal: TradingSignal, quantity: number, maxRetries: number = 3): Promise<OrderResponse> {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        logger.info(`🔄 Real order attempt ${attempt}/${maxRetries} for ${signal.optionSymbol}`);
+
+        const orderResponse = await this.placeRealOrder(signal, quantity);
+
+        // Success - return immediately
+        if (orderResponse.status && orderResponse.data?.orderid) {
+          logger.info(`✅ Real order successful on attempt ${attempt}`);
+          return orderResponse;
+        }
+
+        // Check if error is retryable
+        const isRetryable = this.isRetryableError(orderResponse.message || '');
+
+        if (!isRetryable || attempt === maxRetries) {
+          logger.error(`❌ Real order failed permanently after attempt ${attempt}: ${orderResponse.message}`);
+          return orderResponse;
+        }
+
+        // Calculate exponential backoff delay
+        const baseDelay = 2000; // 2 seconds
+        const delay = Math.min(baseDelay * Math.pow(2, attempt - 1), 10000); // Max 10 seconds
+
+        logger.warn(`⏳ Real order attempt ${attempt} failed (retryable), waiting ${delay}ms: ${orderResponse.message}`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+
+      } catch (error) {
+        const isLastAttempt = attempt === maxRetries;
+
+        if (isLastAttempt) {
+          logger.error(`❌ Real order failed after ${maxRetries} attempts: ${(error as Error).message}`);
+          throw error;
+        }
+
+        // Check if error is retryable
+        const isRetryable = this.isRetryableError((error as Error).message);
+
+        if (!isRetryable) {
+          logger.error(`❌ Real order failed with non-retryable error: ${(error as Error).message}`);
+          throw error;
+        }
+
+        // Calculate exponential backoff delay
+        const baseDelay = 2000; // 2 seconds
+        const delay = Math.min(baseDelay * Math.pow(2, attempt - 1), 10000); // Max 10 seconds
+
+        logger.warn(`⏳ Real order attempt ${attempt} failed (retryable), waiting ${delay}ms: ${(error as Error).message}`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+
+    throw new Error(`Real order failed after ${maxRetries} attempts`);
+  }
+
+  // Determine if an error is retryable
+  private isRetryableError(errorMessage: string): boolean {
+    const retryableErrors = [
+      'timeout',
+      'network',
+      'connection',
+      'server error',
+      'internal error',
+      'temporary',
+      'rate limit',
+      'throttle',
+      '500',
+      '502',
+      '503',
+      '504',
+      'ECONNRESET',
+      'ETIMEDOUT',
+      'ENOTFOUND'
+    ];
+
+    const nonRetryableErrors = [
+      'insufficient funds',
+      'invalid symbol',
+      'invalid strike',
+      'market closed',
+      'order rejected',
+      'authentication failed',
+      'unauthorized'
+    ];
+
+    const errorLower = errorMessage.toLowerCase();
+
+    // Check non-retryable errors first
+    if (nonRetryableErrors.some(nonRetryableError => errorLower.includes(nonRetryableError))) {
+      return false;
+    }
+
+    // Check retryable errors
+    return retryableErrors.some(retryableError => errorLower.includes(retryableError));
   }
 
   private async assessMarketLiquidity(symbol: string, currentPrice: number): Promise<'LIQUID' | 'ILLIQUID' | 'VOLATILE'> {
