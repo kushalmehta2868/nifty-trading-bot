@@ -4,6 +4,7 @@ import { telegramBot } from './services/telegramBot';
 import { orderService } from './services/orderService';
 import { healthServer } from './services/healthServer';
 import { healthMonitor } from './services/healthMonitor';
+import { optionsChainMonitor } from './services/optionsChainMonitor';
 import { logger } from './utils/logger';
 import { dailyCleanup } from './utils/dailyCleanup';
 import { startupReset } from './utils/startupReset';
@@ -72,7 +73,11 @@ class WebSocketTradingBot {
       // 5. Initialize Health Monitor
       await healthMonitor.initialize();
 
-      // 6. Send startup notification with reset confirmation
+      // 6. Start options chain monitoring for enhanced market insights
+      optionsChainMonitor.startMonitoring();
+      logger.info('✅ Options chain monitoring started');
+
+      // 7. Send startup notification with reset confirmation
       await telegramBot.sendStartupMessage();
       await telegramBot.sendMessage('🔄 FRESH START: All data cleared, positions reset, statistics zeroed. Bot is completely fresh and ready for trading!');
 
@@ -129,6 +134,10 @@ class WebSocketTradingBot {
       await strategy.initialize();
       await orderService.initialize();
 
+      // Start options chain monitoring
+      optionsChainMonitor.startMonitoring();
+      logger.info('✅ Options chain monitoring started for market session');
+
       this.isRunning = true;
       this.scheduleMarketClose();
       this.startHeartbeat();
@@ -182,6 +191,7 @@ class WebSocketTradingBot {
     // Disconnect services
     webSocketFeed.disconnect();
     orderService.stopMonitoring();
+    optionsChainMonitor.stopMonitoring();
     healthServer.stop();
     dailyCleanup.stop();
 

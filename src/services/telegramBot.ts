@@ -3,6 +3,7 @@ import { config } from '../config/config';
 import { logger } from '../utils/logger';
 import { TradingSignal, TradingStats } from '../types';
 import { getMarketStatus, isNSEMarketOpen } from '../utils/marketHours';
+import { optionsChainMonitor } from './optionsChainMonitor';
 
 class TelegramBotService {
   private bot: TelegramBot | null = null;
@@ -102,6 +103,11 @@ class TelegramBotService {
     };
     (process as any).on('dailyCleanupFailed', cleanupFailedHandler);
     this.eventListeners.push({ event: 'dailyCleanupFailed', handler: cleanupFailedHandler });
+
+    // ✅ Setup options chain monitoring alerts
+    optionsChainMonitor.onAlert((alert) => {
+      this.handleOptionsAlert(alert);
+    });
 
     // WebSocket status events disabled - user preference
     // const websocketStatusHandler = async (data: { status: string, message: string }) => {
@@ -457,6 +463,66 @@ ${status === 'connected' ? '✅ Live data streaming resumed' : '⚠️ Switching
 
     await this.sendMessage(message);
     logger.warn('🚨 Daily cleanup failure notification sent');
+  }
+
+  // ✅ Handle options chain monitoring alerts
+  private async handleOptionsAlert(alert: any): Promise<void> {
+    if (!this.bot) return;
+
+    // Only send critical and warning alerts to avoid spam
+    if (alert.severity === 'INFO') return;
+
+    const severityEmoji = alert.severity === 'CRITICAL' ? '🚨' : '⚠️';
+    const typeEmoji = this.getAlertTypeEmoji(alert.type);
+
+    let message = `${severityEmoji} *${alert.indexName} Options Alert*\n\n`;
+    message += `${typeEmoji} *${alert.type.replace(/_/g, ' ')}*\n`;
+    message += `📝 ${alert.message}\n`;
+    message += `⏰ ${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}`;
+
+    // Add specific data based on alert type
+    if (alert.type === 'PCR_EXTREME' && alert.data) {
+      message += `\n\n📊 *Details:*`;
+      message += `\n• PCR: ${alert.data.pcr?.toFixed(2)}`;
+      message += `\n• Spot: ${alert.data.spotPrice?.toFixed(0)}`;
+      if (alert.data.maxPain) {
+        message += `\n• Max Pain: ${alert.data.maxPain}`;
+      }
+    } else if (alert.type === 'MAX_PAIN_SHIFT' && alert.data) {
+      message += `\n\n📊 *Details:*`;
+      message += `\n• Shift: ${alert.data.shift > 0 ? '+' : ''}${alert.data.shift}`;
+      message += `\n• Shift %: ${alert.data.shiftPercent?.toFixed(1)}%`;
+      message += `\n• Current: ${alert.data.currentMaxPain}`;
+      message += `\n• Previous: ${alert.data.previousMaxPain}`;
+    } else if (alert.type === 'VOLATILITY_SKEW' && alert.data) {
+      message += `\n\n📊 *Details:*`;
+      message += `\n• Skew Ratio: ${alert.data.currentSkew?.toFixed(2)}`;
+      message += `\n• ATM IV: ${(alert.data.atmIV * 100)?.toFixed(1)}%`;
+      message += `\n• OTM Call IV: ${(alert.data.otmCallIV * 100)?.toFixed(1)}%`;
+      message += `\n• OTM Put IV: ${(alert.data.otmPutIV * 100)?.toFixed(1)}%`;
+    }
+
+    try {
+      await this.sendMessage(message);
+      logger.info(`📱 Options alert sent: ${alert.type} for ${alert.indexName}`);
+    } catch (error) {
+      logger.error(`Failed to send options alert: ${(error as Error).message}`);
+    }
+  }
+
+  private getAlertTypeEmoji(alertType: string): string {
+    switch (alertType) {
+      case 'PCR_EXTREME':
+        return '📈';
+      case 'MAX_PAIN_SHIFT':
+        return '🎯';
+      case 'HIGH_OI_BUILD':
+        return '📊';
+      case 'VOLATILITY_SKEW':
+        return '⚡';
+      default:
+        return '📋';
+    }
   }
 
   public cleanup(): void {

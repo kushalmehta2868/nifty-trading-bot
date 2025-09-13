@@ -10,6 +10,8 @@ import { isMarketOpen } from '../utils/marketHours';
 import { angelAPI } from './angelAPI';
 import { webSocketFeed } from './webSocketFeed';
 import { signalProcessingMutex, positionManagementMutex } from '../utils/mutex';
+import { greeksCalculator, OptionDetails } from '../utils/greeksCalculator';
+import { optionsChainAnalyzer, OptionsChainAnalysis } from './optionsChainAnalyzer';
 
 interface PriceBufferItem {
   price: number;
@@ -413,32 +415,37 @@ class TradingStrategy {
     // ✅ NEW: VWAP analysis
     const vwapData = this.calculateVWAP(priceBuffer, 20);
 
-    // ✅ OPTIMIZED Multi-timeframe CE conditions (balanced quality vs frequency + VWAP)
+    // ✅ Get options chain analysis for enhanced signal validation
+    const optionsAnalysis = await this.getOptionsChainAnalysis(indexName, currentPrice);
+
+    // ✅ OPTIMIZED Multi-timeframe CE conditions (balanced quality vs frequency + VWAP + Options)
     const mtfCEConditions = {
       rsi_bullish: (+((rsi1 > 52)) + (+(rsi5 > 52)) + (+(rsi10 > 52))) >= 2, // Relaxed RSI requirement
       trend_alignment: currentPrice > sma1 && sma1 >= sma5, // Less strict - only 2 timeframes
       momentum_strong: momentum1 > this.getMomentumThreshold(indexName) || momentum5 > this.getMomentumThreshold(indexName), // OR instead of AND
       confluence_good: confluenceScore >= 60, // Lower confluence requirement
       vwap_bullish: currentPrice > vwapData.vwap && (vwapData.vwapTrend === 'BULLISH' || vwapData.priceVsVwap > 0.05), // Price above VWAP with bullish bias
+      options_supportive: optionsAnalysis ? (optionsAnalysis.pcr > 1.2 || optionsAnalysis.spotPrice < optionsAnalysis.maxPain) : true, // High PCR or below max pain supports bullish
       time_filter: this.isWithinTradingHours(indexName)
     };
 
-    // ✅ OPTIMIZED Multi-timeframe PE conditions (balanced quality vs frequency + VWAP)
+    // ✅ OPTIMIZED Multi-timeframe PE conditions (balanced quality vs frequency + VWAP + Options)
     const mtfPEConditions = {
       rsi_bearish: (+((rsi1 < 48)) + (+(rsi5 < 48)) + (+(rsi10 < 48))) >= 2, // Relaxed RSI requirement
       trend_alignment: currentPrice < sma1 && sma1 <= sma5, // Less strict - only 2 timeframes
       momentum_strong: momentum1 < -this.getMomentumThreshold(indexName) || momentum5 < -this.getMomentumThreshold(indexName), // OR instead of AND
       confluence_good: confluenceScore >= 60, // Lower confluence requirement
       vwap_bearish: currentPrice < vwapData.vwap && (vwapData.vwapTrend === 'BEARISH' || vwapData.priceVsVwap < -0.05), // Price below VWAP with bearish bias
+      options_supportive: optionsAnalysis ? (optionsAnalysis.pcr < 0.8 || optionsAnalysis.spotPrice > optionsAnalysis.maxPain) : true, // Low PCR or above max pain supports bearish
       time_filter: this.isWithinTradingHours(indexName)
     };
 
-    // ✅ SCORING SYSTEM: Require 5/6 conditions (including VWAP)
+    // ✅ SCORING SYSTEM: Require 5/7 conditions (including VWAP + Options)
     const mtfCEScore = Object.values(mtfCEConditions).filter(c => c === true).length;
     const mtfPEScore = Object.values(mtfPEConditions).filter(c => c === true).length;
-    
-    const mtfCEMet = mtfCEScore >= 5; // 5 out of 6 conditions (higher bar with VWAP)
-    const mtfPEMet = mtfPEScore >= 5; // 5 out of 6 conditions (higher bar with VWAP)
+
+    const mtfCEMet = mtfCEScore >= 5; // 5 out of 7 conditions (including options analysis)
+    const mtfPEMet = mtfPEScore >= 5; // 5 out of 7 conditions (including options analysis)
 
     // Log multi-timeframe analysis every 20 seconds (less frequent due to complexity)
     const shouldLogMTF = Date.now() % 20000 < 1000;
@@ -809,7 +816,28 @@ class TradingStrategy {
 
         signal.entryPrice = realPrice;
 
-        // 🚀 ADAPTIVE VOLATILITY-BASED TARGETS 
+        // ✅ OPTIONS-SPECIFIC RISK MANAGEMENT: Greeks analysis
+        const daysToExpiry = this.calculateDaysToExpiry(this.generateExpiryString(signal.indexName));
+        const strike = this.extractStrikeFromSymbol(signal.optionSymbol, signal.indexName);
+
+        const optionsRiskAssessment = await this.performOptionsRiskAssessment(
+          signal.indexName,
+          signal.spotPrice,
+          strike,
+          signal.optionType || 'CE', // Fallback to CE if undefined
+          daysToExpiry,
+          realPrice
+        );
+
+        // Reject high-risk options based on Greeks
+        if (optionsRiskAssessment.shouldReject) {
+          logger.error(`❌ OPTIONS RISK REJECTION:`);
+          logger.error(`   Risk Level: ${optionsRiskAssessment.riskLevel}`);
+          logger.error(`   Warnings: ${optionsRiskAssessment.warnings.join(', ')}`);
+          throw new Error(`Options risk too high: ${optionsRiskAssessment.riskLevel}`);
+        }
+
+        // 🚀 ADAPTIVE VOLATILITY-BASED TARGETS
         const prices = this.priceBuffers[signal.indexName].map(item => item.price);
         const volatility = this.calculateAdaptiveVolatility(prices);
 
@@ -1091,8 +1119,47 @@ class TradingStrategy {
     }
   }
 
-  // Rough option premium estimation based on intrinsic + time value
+  // Sophisticated option premium estimation using Black-Scholes and Greeks
   private estimateOptionPremium(
+    spotPrice: number,
+    strike: number,
+    optionType: OptionType,
+    daysToExpiry: number,
+    indexName: IndexName
+  ): number {
+    try {
+      // Use Greeks calculator for accurate premium estimation
+      const analysis = greeksCalculator.analyzeNiftyBankNiftyOption(
+        indexName,
+        spotPrice,
+        strike,
+        optionType,
+        daysToExpiry
+      );
+
+      const theoreticalPremium = analysis.theoreticalPrice;
+
+      // Add small buffer for bid-ask spread and market conditions
+      const marketBuffer = theoreticalPremium * 0.05; // 5% buffer
+      const estimatedPremium = theoreticalPremium + marketBuffer;
+
+      // Ensure minimum premium for very OTM options
+      const minimumPremium = indexName === 'BANKNIFTY' ? 20 : 10;
+
+      logger.debug(`🔢 ${indexName} ${strike}${optionType}: Theoretical=₹${theoreticalPremium.toFixed(2)}, Est=₹${estimatedPremium.toFixed(2)}, IV=${(analysis.impliedVolatility*100).toFixed(1)}%, Delta=${analysis.greeks.delta.toFixed(3)}`);
+
+      return Math.max(estimatedPremium, minimumPremium);
+
+    } catch (error) {
+      logger.warn(`Failed to calculate Greeks for ${indexName} ${strike}${optionType}, using fallback estimation: ${(error as Error).message}`);
+
+      // Fallback to basic calculation if Greeks calculation fails
+      return this.basicPremiumEstimation(spotPrice, strike, optionType, daysToExpiry, indexName);
+    }
+  }
+
+  // Fallback basic premium estimation (kept as backup)
+  private basicPremiumEstimation(
     spotPrice: number,
     strike: number,
     optionType: OptionType,
@@ -1107,24 +1174,121 @@ class TradingStrategy {
       intrinsicValue = strike - spotPrice;
     }
 
-    // Time value estimation (rough approximation)
-    // Higher volatility for BANKNIFTY, more time value for longer expiry
-    const volatilityFactor = indexName === 'BANKNIFTY' ? 0.25 : 0.20; // 25% vs 20% annualized
-    const timeValueBase = Math.sqrt(daysToExpiry / 365) * volatilityFactor * spotPrice * 0.1; // Rough approximation
+    // Time value estimation
+    const volatilityFactor = indexName === 'BANKNIFTY' ? 0.25 : 0.20;
+    const timeValueBase = Math.sqrt(daysToExpiry / 365) * volatilityFactor * spotPrice * 0.1;
 
-    // Distance penalty - options further away have less time value per rupee
     const distanceFromSpot = Math.abs(spotPrice - strike) / spotPrice;
-    const distancePenalty = Math.exp(-distanceFromSpot * 3); // Exponential decay
-
+    const distancePenalty = Math.exp(-distanceFromSpot * 3);
     const timeValue = timeValueBase * distancePenalty;
 
-    // Total premium (never less than intrinsic value)
     const totalPremium = Math.max(intrinsicValue + timeValue, intrinsicValue);
-
-    // Minimum premium for very OTM options (market makers need some profit)
-    const minimumPremium = indexName === 'BANKNIFTY' ? 20 : 10; // Minimum ₹20 for BankNifty, ₹10 for Nifty
+    const minimumPremium = indexName === 'BANKNIFTY' ? 20 : 10;
 
     return Math.max(totalPremium, minimumPremium);
+  }
+
+  // ✅ Perform comprehensive options risk assessment using Greeks
+  private async performOptionsRiskAssessment(
+    indexName: IndexName,
+    spotPrice: number,
+    strike: number,
+    optionType: OptionType,
+    daysToExpiry: number,
+    currentPremium: number
+  ): Promise<{
+    riskLevel: 'LOW' | 'MEDIUM' | 'HIGH' | 'EXTREME';
+    shouldReject: boolean;
+    warnings: string[];
+    greeks: any;
+  }> {
+    try {
+      const analysis = greeksCalculator.analyzeNiftyBankNiftyOption(
+        indexName,
+        spotPrice,
+        strike,
+        optionType,
+        daysToExpiry,
+        currentPremium
+      );
+
+      const riskAssessment = analysis.riskAssessment;
+      const shouldReject = riskAssessment.riskLevel === 'EXTREME';
+
+      // Additional custom risk checks for trading bot
+      const customWarnings: string[] = [...riskAssessment.warnings];
+
+      // Check for very low delta (weak directional exposure)
+      if (Math.abs(analysis.greeks.delta) < 0.15) {
+        customWarnings.push(`Very low delta (${analysis.greeks.delta.toFixed(3)}) - weak directional exposure`);
+      }
+
+      // Check for excessive theta decay
+      const dailyDecayPercent = (Math.abs(analysis.greeks.theta) / currentPremium) * 100;
+      if (dailyDecayPercent > 3) {
+        customWarnings.push(`High daily theta decay: ${dailyDecayPercent.toFixed(1)}% per day`);
+      }
+
+      // Check for very high implied volatility (potential trap)
+      if (analysis.impliedVolatility > 0.40) { // 40%+ IV
+        customWarnings.push(`Very high implied volatility: ${(analysis.impliedVolatility * 100).toFixed(1)}%`);
+      }
+
+      // Check for options too close to expiry
+      if (daysToExpiry <= 3) {
+        customWarnings.push(`Options expire in ${daysToExpiry} days - extreme time decay risk`);
+      }
+
+      // Override should reject based on custom rules
+      const customShouldReject = shouldReject ||
+                                daysToExpiry <= 1 ||
+                                dailyDecayPercent > 5 ||
+                                Math.abs(analysis.greeks.delta) < 0.10;
+
+      logger.debug(`🎯 Options Risk: ${indexName} ${strike}${optionType} - ${riskAssessment.riskLevel} risk, Delta=${analysis.greeks.delta.toFixed(3)}, Theta=${analysis.greeks.theta.toFixed(2)}, IV=${(analysis.impliedVolatility*100).toFixed(1)}%`);
+
+      return {
+        riskLevel: riskAssessment.riskLevel,
+        shouldReject: customShouldReject,
+        warnings: customWarnings,
+        greeks: analysis.greeks
+      };
+
+    } catch (error) {
+      logger.warn(`Options risk assessment failed: ${(error as Error).message}`);
+      return {
+        riskLevel: 'MEDIUM',
+        shouldReject: false,
+        warnings: ['Risk assessment failed - using medium risk default'],
+        greeks: null
+      };
+    }
+  }
+
+  // ✅ Get options chain analysis for signal enhancement
+  private async getOptionsChainAnalysis(indexName: IndexName, spotPrice: number): Promise<OptionsChainAnalysis | null> {
+    try {
+      const expiry = this.generateExpiryString(indexName);
+
+      // Fetch options chain data
+      const chainData = await optionsChainAnalyzer.getOptionsChain(indexName, spotPrice, expiry);
+
+      if (chainData.length === 0) {
+        logger.debug(`📊 No options chain data available for ${indexName}`);
+        return null;
+      }
+
+      // Analyze the options chain
+      const analysis = optionsChainAnalyzer.analyzeOptionsChain(indexName, chainData, spotPrice);
+
+      logger.debug(`📊 ${indexName} Options Analysis: PCR=${analysis.pcr.toFixed(2)}, MaxPain=${analysis.maxPain}, Spot=${spotPrice.toFixed(0)}`);
+
+      return analysis;
+
+    } catch (error) {
+      logger.warn(`Failed to get options chain analysis for ${indexName}: ${(error as Error).message}`);
+      return null;
+    }
   }
 
   // Helper method to extract strike price from option symbol
