@@ -1025,7 +1025,24 @@ class OrderService {
         exitTrades.sort((a, b) => new Date(a.filltime || a.exchangetime).getTime() - new Date(b.filltime || b.exchangetime).getTime());
 
         const exitTrade = exitTrades[0];
-        const exitPrice = parseFloat(exitTrade.fillprice || exitTrade.price);
+
+        // Enhanced exit price extraction with validation
+        const rawFillPrice = exitTrade.fillprice || exitTrade.price;
+        logger.info(`🔍 RAW EXIT PRICE DATA: fillprice=${exitTrade.fillprice}, price=${exitTrade.price}, rawFillPrice=${rawFillPrice}`);
+
+        if (!rawFillPrice || rawFillPrice === '0' || rawFillPrice === 0) {
+          logger.error(`❌ INVALID EXIT PRICE: fillprice=${exitTrade.fillprice}, price=${exitTrade.price} for ${activeOrder.signal.optionSymbol}`);
+          logger.error(`❌ Exit trade data:`, JSON.stringify(exitTrade, null, 2));
+          return;
+        }
+
+        const exitPrice = parseFloat(rawFillPrice);
+        if (isNaN(exitPrice) || exitPrice <= 0) {
+          logger.error(`❌ PARSED EXIT PRICE IS INVALID: ${exitPrice} from rawFillPrice=${rawFillPrice} for ${activeOrder.signal.optionSymbol}`);
+          return;
+        }
+
+        logger.info(`✅ VALID EXIT PRICE EXTRACTED: ₹${exitPrice} for ${activeOrder.signal.optionSymbol}`);
         const entryPrice = activeOrder.entryPrice || activeOrder.signal.entryPrice;
 
         // ✅ FIXED: Check for already processed exit by checking exitPrice
