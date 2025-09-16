@@ -2448,7 +2448,7 @@ ${pnlColor} P&L: ${pnlSign}₹${pnl.toFixed(2)}
               });
 
               if (exitTrades.length > 0) {
-                exitTrades.sort((a, b) => new Date(b.filltime || b.exchangetime).getTime() - new Date(a.filltime || a.exchangetime).getTime());
+                exitTrades.sort((a: any, b: any) => new Date(b.filltime || b.exchangetime).getTime() - new Date(a.filltime || a.exchangetime).getTime());
                 const actualExitPrice = parseFloat(exitTrades[0].fillprice || exitTrades[0].price);
 
                 if (actualExitPrice && actualExitPrice > 0) {
