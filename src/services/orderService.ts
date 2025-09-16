@@ -2430,24 +2430,56 @@ ${pnlColor} P&L: ${pnlSign}₹${pnl.toFixed(2)}
           logger.debug(`Force exit API call failed for ${activeOrder.signal.optionSymbol}`);
         }
 
-        // Method 2: Alternative price estimation if API fails
+        // Method 2: Check trade book first before price estimation
+        if (!currentPrice || currentPrice <= 0) {
+          logger.warn(`📋 API failed, checking trade book for actual exit price for ${activeOrder.signal.optionSymbol}`);
+
+          try {
+            // Try to get actual exit from trade book first
+            const tradeBookResponse = await angelAPI.getTradeBook();
+            const trades = tradeBookResponse?.data;
+
+            if (trades) {
+              const exitTrades = trades.filter((trade: any) => {
+                const isMatchingSymbol = trade.tradingsymbol === activeOrder.signal.optionSymbol;
+                const isSellTrade = trade.transactiontype?.toUpperCase() === 'SELL';
+                const isAfterEntry = new Date(trade.filltime || trade.exchangetime) > activeOrder.timestamp;
+                return isMatchingSymbol && isSellTrade && isAfterEntry;
+              });
+
+              if (exitTrades.length > 0) {
+                exitTrades.sort((a, b) => new Date(b.filltime || b.exchangetime).getTime() - new Date(a.filltime || a.exchangetime).getTime());
+                const actualExitPrice = parseFloat(exitTrades[0].fillprice || exitTrades[0].price);
+
+                if (actualExitPrice && actualExitPrice > 0) {
+                  currentPrice = actualExitPrice;
+                  logger.info(`✅ FOUND ACTUAL EXIT PRICE from trade book: ₹${currentPrice} for ${activeOrder.signal.optionSymbol}`);
+                }
+              }
+            }
+          } catch (error) {
+            logger.debug('Trade book check failed, falling back to estimation');
+          }
+        }
+
+        // Method 3: Final fallback - conservative price estimation
         if (!currentPrice || currentPrice <= 0) {
           const entryPrice = activeOrder.entryPrice || activeOrder.signal.entryPrice;
           const timeHeld = (Date.now() - (activeOrder.entryTime?.getTime() || activeOrder.timestamp.getTime())) / (1000 * 60 * 60);
-          
+
           // ✅ MORE CONSERVATIVE ESTIMATION to avoid wild exit prices
           const decayFactor = Math.max(0.6, 1 - (timeHeld * 0.06)); // 6% decay per hour, min 60%
           currentPrice = entryPrice * decayFactor;
-          
+
           // ✅ SANITY CHECK: Ensure estimated price stays within reasonable bounds
           const target = activeOrder.signal.target;
           const stopLoss = activeOrder.signal.stopLoss;
-          
+
           // Cap estimated price between 80% of SL and 120% of target
           const minPrice = stopLoss * 0.8;
           const maxPrice = target * 1.2;
           currentPrice = Math.max(minPrice, Math.min(maxPrice, currentPrice));
-          
+
           logger.warn(`🔄 FORCE EXIT using BOUNDED estimated price: ${activeOrder.signal.optionSymbol} = ₹${currentPrice}`);
           logger.warn(`   Time held: ${timeHeld.toFixed(1)}h | Decay factor: ${decayFactor.toFixed(2)} | Bounds: ₹${minPrice}-₹${maxPrice}`);
           logger.error(`⚠️ WARNING: Using estimated price for exit - may not reflect actual market conditions`);
