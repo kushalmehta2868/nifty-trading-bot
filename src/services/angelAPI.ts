@@ -1389,6 +1389,16 @@ class AngelAPI {
     }
   }
 
+  // ✅ Emergency memory cleanup
+  public clearAllCaches(): void {
+    try {
+      this.searchScripCache.clear();
+      logger.info(`🧹 Cleared all AngelAPI caches`);
+    } catch (error) {
+      logger.error('Failed to clear AngelAPI caches:', (error as Error).message);
+    }
+  }
+
 }
 
 export const angelAPI = new AngelAPI();

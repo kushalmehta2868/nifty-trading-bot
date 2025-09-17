@@ -4,7 +4,7 @@
     "description": "Automated Trading Bot with Angel SmartAPI",
     "main": "src/app.js",
     "scripts": {
-        "start": "node --expose-gc --max-old-space-size=512 dist/app.js",
+        "start": "NODE_ENV=production node --expose-gc --max-old-space-size=200 --max-semi-space-size=8 --optimize-for-size dist/app.js",
         "start:ts": "ts-node src/app.ts",
         "dev": "nodemon --exec ts-node src/app.ts",
         "build": "npm run clean && tsc",

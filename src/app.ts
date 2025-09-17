@@ -4,6 +4,7 @@ import { telegramBot } from './services/telegramBot';
 import { orderService } from './services/orderService';
 import { healthServer } from './services/healthServer';
 import { healthMonitor } from './services/healthMonitor';
+import { angelAPI } from './services/angelAPI';
 import { logger } from './utils/logger';
 import { dailyCleanup } from './utils/dailyCleanup';
 import { startupReset } from './utils/startupReset';
@@ -248,9 +249,9 @@ class WebSocketTradingBot {
   private startMemoryMonitoring(): void {
     this.memoryCheckInterval = setInterval(() => {
       this.checkMemoryUsage();
-    }, 300000); // Check every 5 minutes
+    }, 60000); // Check every 1 minute (more aggressive)
 
-    logger.debug('🧠 Started memory monitoring');
+    logger.debug('🧠 Started aggressive memory monitoring');
   }
 
   private checkMemoryUsage(): void {
@@ -262,9 +263,10 @@ class WebSocketTradingBot {
     // Log memory usage
     logger.info(`🧠 Memory: ${heapUsedMB}MB used / ${heapTotalMB}MB heap / ${rssMB}MB RSS`);
 
-    // Alert if memory usage is high (above 400MB)
-    if (rssMB > 400) {
-      logger.warn(`⚠️ HIGH MEMORY USAGE: ${rssMB}MB RSS - may need optimization`);
+    // Alert if memory usage is high (above 150MB - very aggressive for Render)
+    if (rssMB > 150) {
+      logger.warn(`⚠️ HIGH MEMORY USAGE: ${rssMB}MB RSS - triggering cleanup`);
+      this.performEmergencyCleanup();
 
       // Force garbage collection if available
       if (global.gc) {
@@ -275,9 +277,38 @@ class WebSocketTradingBot {
       }
     }
 
-    // Critical memory threshold (above 800MB)
-    if (rssMB > 800) {
-      logger.error(`🚨 CRITICAL MEMORY USAGE: ${rssMB}MB - Bot may crash soon!`);
+    // Critical memory threshold (above 200MB - much lower than before)
+    if (rssMB > 200) {
+      logger.error(`🚨 CRITICAL MEMORY USAGE: ${rssMB}MB - performing emergency cleanup!`);
+      this.performEmergencyCleanup();
+
+      // Force multiple GC cycles
+      if (global.gc) {
+        for (let i = 0; i < 3; i++) {
+          global.gc();
+        }
+      }
+    }
+  }
+
+  private performEmergencyCleanup(): void {
+    logger.warn('🚨 EMERGENCY CLEANUP: Aggressively clearing memory...');
+
+    try {
+      // Reset all service states to clear accumulated data
+      strategy.resetState();
+      orderService.resetState();
+
+      // Clear WebSocket data buffers
+      webSocketFeed.clearDataBuffers();
+
+      // Clear caches in AngelAPI
+      angelAPI.stopCacheCleanup();
+      angelAPI.clearAllCaches();
+
+      logger.info('✅ Emergency cleanup completed');
+    } catch (error) {
+      logger.error('❌ Emergency cleanup failed:', (error as Error).message);
     }
   }
 

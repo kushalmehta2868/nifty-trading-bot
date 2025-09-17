@@ -10,7 +10,7 @@ const istTimestamp = winston.format((info) => {
 });
 
 export const logger = winston.createLogger({
-  level: 'info',
+  level: process.env.NODE_ENV === 'production' ? 'warn' : 'info', // Less verbose in production
   format: winston.format.combine(
     istTimestamp(),
     winston.format.colorize(),
@@ -20,6 +20,11 @@ export const logger = winston.createLogger({
   ),
   transports: [
     new winston.transports.Console(),
-    new winston.transports.File({ filename: 'trading-bot.log' })
+    new winston.transports.File({
+      filename: 'trading-bot.log',
+      maxsize: 5000000, // 5MB max file size
+      maxFiles: 2, // Keep only 2 files
+      tailable: true // Overwrite old files
+    })
   ]
 });

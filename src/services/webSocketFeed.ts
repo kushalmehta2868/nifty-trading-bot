@@ -455,6 +455,22 @@ class WebSocketFeed {
     }
   }
 
+  // ✅ Emergency memory cleanup
+  public clearDataBuffers(): void {
+    try {
+      // Clear all price data arrays
+      Object.keys(this.priceData).forEach(indexName => {
+        const data = this.priceData[indexName as IndexName];
+        if (data.prices) data.prices = [];
+        if (data.volumes) data.volumes = [];
+      });
+
+      logger.info('🧹 Cleared WebSocket data buffers');
+    } catch (error) {
+      logger.error('Failed to clear WebSocket buffers:', (error as Error).message);
+    }
+  }
+
 }
 
 export const webSocketFeed = new WebSocketFeed();
