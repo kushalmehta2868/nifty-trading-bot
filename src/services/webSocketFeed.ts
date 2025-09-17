@@ -290,7 +290,7 @@ class WebSocketFeed {
 
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       logger.error('CRITICAL: Max reconnection attempts reached - switching to REST polling mode');
-      this.fallbackToRestPolling();
+      this.startRESTFallback();
       return;
     }
 
