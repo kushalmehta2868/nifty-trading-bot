@@ -26,6 +26,7 @@ class WebSocketTradingBot {
 
   public async start(): Promise<void> {
     try {
+      console.log('🚀 WebSocket Trading Bot Starting...'); // Direct console log for visibility
       logger.info('🚀 WebSocket Trading Bot Starting...');
 
       // ✅ STEP 1: COMPLETE STARTUP RESET - Everything fresh
@@ -83,7 +84,9 @@ class WebSocketTradingBot {
       logger.info('✅ All services initialized successfully with comprehensive monitoring');
 
     } catch (error) {
+      console.error('❌ STARTUP FAILED:', (error as Error).message); // Direct console error
       logger.error('Failed to start trading bot:', (error as Error).message);
+      console.error('Stack trace:', (error as Error).stack); // Full stack trace
       process.exit(1);
     }
   }
@@ -331,10 +334,14 @@ class WebSocketTradingBot {
 }
 
 // Start the bot
+console.log('🔄 Initializing WebSocket Trading Bot...');
 const bot = new WebSocketTradingBot();
 
 // Handle startup
+console.log('🚀 Starting bot initialization...');
 bot.start().catch(error => {
+  console.error('❌ Bot startup failed:', error.message);
+  console.error('Stack:', error.stack);
   logger.error('Bot startup failed:', error);
   process.exit(1);
 });
