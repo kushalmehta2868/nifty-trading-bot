@@ -289,8 +289,9 @@ class WebSocketFeed {
     }
 
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      logger.error('CRITICAL: Max reconnection attempts reached - cannot proceed without real market data');
-      throw new Error('WebSocket connection permanently failed');
+      logger.error('CRITICAL: Max reconnection attempts reached - switching to REST polling mode');
+      this.fallbackToRestPolling();
+      return;
     }
 
     const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);

@@ -264,15 +264,15 @@ process.on('SIGTERM', async () => {
   process.exit(0);
 });
 
-// Handle uncaught exceptions
+// Handle uncaught exceptions - don't exit to prevent server restarts
 process.on('uncaughtException', (error: Error) => {
-  logger.error('Uncaught Exception:', error);
-  process.exit(1);
+  logger.error('Uncaught Exception (non-fatal):', error);
+  // Don't exit - just log and continue running
 });
 
 process.on('unhandledRejection', (reason: any, promise: Promise<any>) => {
-  logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  process.exit(1);
+  logger.error('Unhandled Rejection (non-fatal) at:', promise, 'reason:', reason);
+  // Don't exit - just log and continue running
 });
 
 export default bot;
