@@ -5,7 +5,7 @@
     "main": "src/app.js",
     "scripts": {
         "start": "NODE_ENV=production node --expose-gc --max-old-space-size=128 --max-semi-space-size=4 --optimize-for-size --gc-interval=100 dist/app.js",
-        "start:ts": "NODE_ENV=production ts-node --expose-gc --max-old-space-size=128 --max-semi-space-size=4 --optimize-for-size src/app.ts",
+        "start:ts": "cross-env NODE_ENV=production node --expose-gc --max-old-space-size=128 --max-semi-space-size=4 --optimize-for-size -r ts-node/register src/app.ts",
         "dev": "nodemon --exec ts-node src/app.ts",
         "build": "npm run clean && tsc",
         "kill-bot": "taskkill /F /IM node.exe 2>nul || echo No Node.js processes found",
@@ -32,6 +32,7 @@
         "@types/node-telegram-bot-api": "^0.64.10",
         "@types/speakeasy": "^2.0.10",
         "@types/ws": "^8.18.1",
+        "cross-env": "^10.0.0",
         "nodemon": "^3.1.10",
         "ts-node": "^10.9.2",
         "typescript": "^5.9.2"
