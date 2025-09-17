@@ -26,6 +26,9 @@ class TradingStrategy {
   private cleanupInterval: NodeJS.Timeout | null = null;
   private positionLoggingInterval: NodeJS.Timeout | null = null;
   private eventHandlers: Map<string, Function> = new Map(); // Track event handlers for cleanup
+  private isWarmingUp = true;
+  private warmupStartTime = 0;
+  private readonly WARMUP_DURATION = 120000; // 2 minutes warmup
   public priceBuffers: PriceBuffers = {
     NIFTY: [],
     BANKNIFTY: []
@@ -35,17 +38,28 @@ class TradingStrategy {
   private getMomentumThreshold(indexName: IndexName): number {
     switch (indexName) {
       case 'NIFTY':
-        return 0.015; // 0.015% - Relaxed for better signal frequency
+        return 0.05; // ✅ 0.05% - Above normal price fluctuation noise
       case 'BANKNIFTY':
-        return 0.025; // 0.025% - Relaxed for better signal frequency
+        return 0.08; // ✅ 0.08% - Higher due to BANKNIFTY's increased volatility
       default:
-        return 0.015; // Default fallback
+        return 0.06; // ✅ Default fallback - meaningful threshold
     }
   }
 
 
   public async initialize(): Promise<void> {
     logger.info('🎯 Trading strategy initializing...');
+
+    // ✅ Start warmup period to prevent premature signals
+    this.isWarmingUp = true;
+    this.warmupStartTime = Date.now();
+    logger.info(`🔥 WARMUP PERIOD STARTED: ${this.WARMUP_DURATION/1000}s - No signals will be generated during warmup`);
+
+    // Schedule warmup end
+    setTimeout(() => {
+      this.isWarmingUp = false;
+      logger.info('🎯 WARMUP COMPLETED: Strategy now ready for signal generation');
+    }, this.WARMUP_DURATION);
 
     // Listen for order placement confirmations (position already locked during signal processing)
     const orderPlacedHandler = (data: any) => {
@@ -216,6 +230,21 @@ class TradingStrategy {
       buffer.shift();
     }
 
+    // ✅ Check warmup period first
+    if (this.isWarmingUp) {
+      const warmupRemaining = this.WARMUP_DURATION - (Date.now() - this.warmupStartTime);
+      if (warmupRemaining > 0) {
+        const shouldLog = Date.now() % 30000 < 1000; // Log every 30 seconds
+        if (shouldLog) {
+          logger.info(`🔥 ${indexName} - WARMUP: ${Math.ceil(warmupRemaining/1000)}s remaining - No signals during warmup`);
+        }
+        return;
+      } else {
+        this.isWarmingUp = false;
+        logger.info('🎯 WARMUP COMPLETED: Strategy now ready for signal generation');
+      }
+    }
+
     // Need enough data for analysis
     if (buffer.length < config.strategy.emaPeriod) {
       const shouldLog = Date.now() % 30000 < 1000; // Log every 30 seconds
@@ -286,19 +315,21 @@ class TradingStrategy {
       return null;
     }
 
-    // Try Strategy 3 first (Multi-Timeframe Confluence) - Highest accuracy
-    const confluenceSignal = await this.analyzeMultiTimeframeConfluence(indexName, currentPrice, prices, priceBuffer);
-    if (confluenceSignal) return confluenceSignal;
+    // ✅ PRIMARY STRATEGY: Multi-Timeframe with fallback only if no signal
+    const primarySignal = await this.analyzeMultiTimeframeConfluence(indexName, currentPrice, prices, priceBuffer);
+    if (primarySignal) {
+      logger.info(`✅ ${indexName} PRIMARY SIGNAL: Multi-Timeframe Confluence - ${primarySignal.optionType} (${primarySignal.confidence.toFixed(1)}%)`);
+      return primarySignal;
+    }
 
-    // Try Strategy 1 (Bollinger + RSI) - High accuracy
-    const bollingerSignal = await this.analyzeBollingerRSIStrategy(indexName, currentPrice, prices, priceBuffer);
-    if (bollingerSignal) return bollingerSignal;
+    // ✅ FALLBACK ONLY: If primary strategy finds no signal, try simplified approach
+    const fallbackSignal = await this.analyzeSimplifiedStrategy(indexName, currentPrice, prices, priceBuffer);
+    if (fallbackSignal) {
+      logger.info(`⚡ ${indexName} FALLBACK SIGNAL: Simplified Strategy - ${fallbackSignal.optionType} (${fallbackSignal.confidence.toFixed(1)}%)`);
+      return fallbackSignal;
+    }
 
-    // Try Strategy 2 (Price Action + Momentum) - Fast response
-    const priceActionSignal = await this.analyzePriceActionStrategy(indexName, currentPrice, prices, priceBuffer);
-    if (priceActionSignal) return priceActionSignal;
-
-    return null; // No signals from any strategy
+    return null; // No signals from either strategy
   }
 
   // 🏆 STRATEGY 3: Multi-Timeframe Confluence (Highest Accuracy - 90%+)
@@ -342,50 +373,46 @@ class TradingStrategy {
     // ✅ NEW: VWAP analysis
     const vwapData = this.calculateVWAP(priceBuffer, 20);
 
-    // ✅ OPTIMIZED Multi-timeframe CE conditions (balanced quality vs frequency + VWAP)
+    // ✅ SIMPLIFIED Multi-timeframe CE conditions (3/4 conditions required)
     const mtfCEConditions = {
-      rsi_bullish: (+((rsi1 > 52)) + (+(rsi5 > 52)) + (+(rsi10 > 52))) >= 2, // Relaxed RSI requirement
-      trend_alignment: currentPrice > sma1 && sma1 >= sma5, // Less strict - only 2 timeframes
-      momentum_strong: momentum1 > this.getMomentumThreshold(indexName) || momentum5 > this.getMomentumThreshold(indexName), // OR instead of AND
-      confluence_good: confluenceScore >= 60, // Lower confluence requirement
-      vwap_bullish: currentPrice > vwapData.vwap && (vwapData.vwapTrend === 'BULLISH' || vwapData.priceVsVwap > 0.05), // Price above VWAP with bullish bias
+      trend_bullish: currentPrice > sma1 && (+((rsi1 > 50)) + (+(rsi5 > 50))) >= 1, // Price above SMA + RSI support
+      momentum_strong: momentum1 > this.getMomentumThreshold(indexName) || momentum5 > this.getMomentumThreshold(indexName), // Strong momentum on any timeframe
+      vwap_bullish: currentPrice > vwapData.vwap && vwapData.priceVsVwap > 0.02, // Price above VWAP with margin
       time_filter: this.isWithinTradingHours(indexName)
     };
 
-    // ✅ OPTIMIZED Multi-timeframe PE conditions (balanced quality vs frequency + VWAP)
+    // ✅ SIMPLIFIED Multi-timeframe PE conditions (3/4 conditions required)
     const mtfPEConditions = {
-      rsi_bearish: (+((rsi1 < 48)) + (+(rsi5 < 48)) + (+(rsi10 < 48))) >= 2, // Relaxed RSI requirement
-      trend_alignment: currentPrice < sma1 && sma1 <= sma5, // Less strict - only 2 timeframes
-      momentum_strong: momentum1 < -this.getMomentumThreshold(indexName) || momentum5 < -this.getMomentumThreshold(indexName), // OR instead of AND
-      confluence_good: confluenceScore >= 60, // Lower confluence requirement
-      vwap_bearish: currentPrice < vwapData.vwap && (vwapData.vwapTrend === 'BEARISH' || vwapData.priceVsVwap < -0.05), // Price below VWAP with bearish bias
+      trend_bearish: currentPrice < sma1 && (+((rsi1 < 50)) + (+(rsi5 < 50))) >= 1, // Price below SMA + RSI pressure
+      momentum_strong: momentum1 < -this.getMomentumThreshold(indexName) || momentum5 < -this.getMomentumThreshold(indexName), // Strong downward momentum
+      vwap_bearish: currentPrice < vwapData.vwap && vwapData.priceVsVwap < -0.02, // Price below VWAP with margin
       time_filter: this.isWithinTradingHours(indexName)
     };
 
-    // ✅ SCORING SYSTEM: Require 5/6 conditions (including VWAP)
+    // ✅ SIMPLIFIED SCORING: Require 3/4 conditions (more achievable)
     const mtfCEScore = Object.values(mtfCEConditions).filter(c => c === true).length;
     const mtfPEScore = Object.values(mtfPEConditions).filter(c => c === true).length;
-    
-    const mtfCEMet = mtfCEScore >= 5; // 5 out of 6 conditions (higher bar with VWAP)
-    const mtfPEMet = mtfPEScore >= 5; // 5 out of 6 conditions (higher bar with VWAP)
+
+    const mtfCEMet = mtfCEScore >= 3; // ✅ 3 out of 4 conditions (balanced approach)
+    const mtfPEMet = mtfPEScore >= 3; // ✅ 3 out of 4 conditions (balanced approach)
 
     // Log multi-timeframe analysis every 20 seconds (less frequent due to complexity)
     const shouldLogMTF = Date.now() % 20000 < 1000;
     if (shouldLogMTF || mtfCEMet || mtfPEMet) {
-      logger.info(`🏆 ${indexName} Multi-Timeframe Confluence (OPTIMIZED + VWAP):`);
-      logger.info(`   💰 Price: ${currentPrice} | VWAP: ${vwapData.vwap} (${vwapData.priceVsVwap > 0 ? '+' : ''}${vwapData.priceVsVwap.toFixed(2)}%) | Trend: ${vwapData.vwapTrend}`);
-      logger.info(`   📊 RSI: 1t=${rsi1.toFixed(1)} | 5t=${rsi5.toFixed(1)} | 10t=${rsi10.toFixed(1)} | Confluence: ${confluenceScore.toFixed(0)}%`);
-      logger.info(`   📈 Momentum: 1t=${momentum1.toFixed(2)}% | 5t=${momentum5.toFixed(2)}% | 10t=${momentum10.toFixed(2)}%`);
-      logger.info(`   🎯 CE: ${mtfCEScore}/6 (need 5+) | PE: ${mtfPEScore}/6 (need 5+)`);
+      logger.info(`🏆 ${indexName} Multi-Timeframe Strategy (SIMPLIFIED):`);
+      logger.info(`   💰 Price: ${currentPrice} | VWAP: ${vwapData.vwap} (${vwapData.priceVsVwap > 0 ? '+' : ''}${vwapData.priceVsVwap.toFixed(2)}%)`);
+      logger.info(`   📊 RSI: 1t=${rsi1.toFixed(1)} | 5t=${rsi5.toFixed(1)} | SMA1: ${sma1.toFixed(1)}`);
+      logger.info(`   📈 Momentum: 1t=${momentum1.toFixed(3)}% | 5t=${momentum5.toFixed(3)}% (threshold: ${this.getMomentumThreshold(indexName)}%)`);
+      logger.info(`   🎯 CE: ${mtfCEScore}/4 (need 3+) | PE: ${mtfPEScore}/4 (need 3+)`);
 
       // Show CE condition status
-      if (mtfCEScore < 5) {
-        logger.info(`   📋 CE Missing: ${mtfCEConditions.rsi_bullish ? '' : 'RSI-Bullish '} ${mtfCEConditions.trend_alignment ? '' : 'Trend-Aligned '} ${mtfCEConditions.momentum_strong ? '' : 'Momentum '} ${mtfCEConditions.confluence_good ? '' : 'Confluence '} ${mtfCEConditions.vwap_bullish ? '' : 'VWAP-Bullish '} ${mtfCEConditions.time_filter ? '' : 'Time'}`);
+      if (mtfCEScore < 3) {
+        logger.info(`   📋 CE Missing: ${mtfCEConditions.trend_bullish ? '' : 'Trend-Bullish '} ${mtfCEConditions.momentum_strong ? '' : 'Momentum '} ${mtfCEConditions.vwap_bullish ? '' : 'VWAP-Bullish '} ${mtfCEConditions.time_filter ? '' : 'Time'}`);
       }
 
       // Show PE condition status
-      if (mtfPEScore < 5) {
-        logger.info(`   📋 PE Missing: ${mtfPEConditions.rsi_bearish ? '' : 'RSI-Bearish '} ${mtfPEConditions.trend_alignment ? '' : 'Trend-Aligned '} ${mtfPEConditions.momentum_strong ? '' : 'Momentum '} ${mtfPEConditions.confluence_good ? '' : 'Confluence '} ${mtfPEConditions.vwap_bearish ? '' : 'VWAP-Bearish '} ${mtfPEConditions.time_filter ? '' : 'Time'}`);
+      if (mtfPEScore < 3) {
+        logger.info(`   📋 PE Missing: ${mtfPEConditions.trend_bearish ? '' : 'Trend-Bearish '} ${mtfPEConditions.momentum_strong ? '' : 'Momentum '} ${mtfPEConditions.vwap_bearish ? '' : 'VWAP-Bearish '} ${mtfPEConditions.time_filter ? '' : 'Time'}`);
       }
     }
 
@@ -397,7 +424,7 @@ class TradingStrategy {
       const { strike, estimatedPremium } = await this.calculateOptimalStrike(currentPrice, indexName, 'CE', expiry);
       const baseConfidence = 80; // Base for relaxed multi-timeframe
       const confluenceBonus = Math.min(15, (confluenceScore - 60) / 2);
-      const trendBonus = mtfCEConditions.trend_alignment ? 5 : 0;
+      const trendBonus = mtfCEConditions.trend_bullish ? 5 : 0;
 
       signal = {
         indexName,
@@ -425,7 +452,7 @@ class TradingStrategy {
       const { strike, estimatedPremium } = await this.calculateOptimalStrike(currentPrice, indexName, 'PE', expiry);
       const baseConfidence = 80;
       const confluenceBonus = Math.min(15, (confluenceScore - 60) / 2);
-      const trendBonus = mtfPEConditions.trend_alignment ? 5 : 0;
+      const trendBonus = mtfPEConditions.trend_bearish ? 5 : 0;
 
       signal = {
         indexName,
@@ -450,6 +477,72 @@ class TradingStrategy {
     }
 
     return signal;
+  }
+
+  // ⚡ SIMPLIFIED FALLBACK STRATEGY: Price Action + Momentum (Fast & Simple)
+  private async analyzeSimplifiedStrategy(
+    indexName: IndexName,
+    currentPrice: number,
+    prices: number[],
+    priceBuffer: PriceBufferItem[]
+  ): Promise<TradingSignal | null> {
+    // Simple indicators only
+    const rsi = this.calculateRSI(prices, 14);
+    const sma = this.calculateSMA(prices, 20);
+    const momentum = this.calculateMomentum(prices, 10);
+    const vwapData = this.calculateVWAP(priceBuffer, 20);
+
+    // ✅ SIMPLE CE CONDITIONS: Just 2/3 required
+    const simpleCEConditions = {
+      trend_up: currentPrice > sma && rsi > 45,
+      momentum_good: momentum > this.getMomentumThreshold(indexName),
+      vwap_support: currentPrice > vwapData.vwap * 0.999 // Very close to VWAP is okay
+    };
+
+    // ✅ SIMPLE PE CONDITIONS: Just 2/3 required
+    const simplePEConditions = {
+      trend_down: currentPrice < sma && rsi < 55,
+      momentum_good: momentum < -this.getMomentumThreshold(indexName),
+      vwap_resistance: currentPrice < vwapData.vwap * 1.001 // Very close to VWAP is okay
+    };
+
+    const ceScore = Object.values(simpleCEConditions).filter(c => c === true).length;
+    const peScore = Object.values(simplePEConditions).filter(c => c === true).length;
+
+    const ceMet = ceScore >= 2 && this.isWithinTradingHours(indexName);
+    const peMet = peScore >= 2 && this.isWithinTradingHours(indexName);
+
+    // Generate signal if conditions met
+    if (ceMet || peMet) {
+      const isCall = ceMet;
+      const strike = this.calculateStrike(currentPrice, indexName);
+      const estimatedPremium = this.estimateOptionPremium(currentPrice, strike, isCall ? 'CE' : 'PE', 7, indexName);
+      const confidence = 70 + (isCall ? ceScore : peScore) * 5; // 70-85% confidence
+
+      const signal: TradingSignal = {
+        indexName,
+        direction: isCall ? 'UP' : 'DOWN',
+        spotPrice: currentPrice,
+        optionType: isCall ? 'CE' : 'PE',
+        optionSymbol: this.generateOptionSymbol(indexName, strike, isCall ? 'CE' : 'PE'),
+        entryPrice: estimatedPremium,
+        target: estimatedPremium * 1.2, // 20% target
+        stopLoss: estimatedPremium * 0.8, // 20% stop loss
+        confidence,
+        timestamp: new Date(),
+        technicals: {
+          ema: 0,
+          rsi: parseFloat(rsi.toFixed(2)),
+          priceChange: parseFloat(momentum.toFixed(2)),
+          vwap: parseFloat(vwapData.vwap.toFixed(2))
+        }
+      };
+
+      logger.info(`⚡ Simplified ${isCall ? 'CE' : 'PE'} Signal: ${indexName} Strike=${strike}, Score=${isCall ? ceScore : peScore}/3`);
+      return signal;
+    }
+
+    return null;
   }
 
   // 🎯 STRATEGY 1: Bollinger Bands + RSI (High Accuracy)
@@ -915,16 +1008,18 @@ class TradingStrategy {
     let gains = 0;
     let losses = 0;
 
-    // Use the MOST RECENT prices, not the first ones
-    const startIndex = prices.length - period;
+    // ✅ FIXED: Proper indexing to avoid negative array access
+    const startIndex = Math.max(1, prices.length - period);
     for (let i = startIndex; i < prices.length; i++) {
-      const change = prices[i] - prices[i - 1];
-      if (change > 0) gains += change;
-      else losses -= change;
+      if (i > 0 && i < prices.length) { // Ensure valid indices
+        const change = prices[i] - prices[i - 1];
+        if (change > 0) gains += change;
+        else losses -= change;
+      }
     }
 
-    const avgGain = gains / period;
-    const avgLoss = losses / period;
+    const avgGain = gains / (period - 1); // Adjust denominator for actual calculation count
+    const avgLoss = losses / (period - 1);
 
     if (avgLoss === 0) return 100;
     const rs = avgGain / avgLoss;
@@ -1719,12 +1814,37 @@ class TradingStrategy {
   }
 
   public resetState(): void {
-    logger.info('🔄 STRATEGY RESET: Clearing all state...');
-    
+    logger.info('🔄 STRATEGY RESET: Ultra-aggressively clearing all state...');
+
     // Clear all tracking variables
     this.lastSignalTime = {};
     this.activePositions = {};
-    
+
+    // Ultra-aggressive memory cleanup for price buffers
+    this.priceBuffers.NIFTY.length = 0;
+    this.priceBuffers.BANKNIFTY.length = 0;
+    this.priceBuffers.NIFTY = [];
+    this.priceBuffers.BANKNIFTY = [];
+
+    // Clear event handlers map
+    this.eventHandlers.clear();
+
+    // Force garbage collection if available
+    if (global.gc) {
+      global.gc();
+    }
+
+    // ✅ Reset warmup state
+    this.isWarmingUp = true;
+    this.warmupStartTime = Date.now();
+    logger.info(`🔥 RESET WARMUP: ${this.WARMUP_DURATION/1000}s warmup period started after reset`);
+
+    // Schedule warmup end for reset
+    setTimeout(() => {
+      this.isWarmingUp = false;
+      logger.info('🎯 RESET WARMUP COMPLETED: Strategy ready for signals after reset');
+    }, this.WARMUP_DURATION);
+
     // Clear price buffers
     this.priceBuffers = {
       NIFTY: [],

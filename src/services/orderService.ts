@@ -353,6 +353,7 @@ class OrderService {
   private monitoringInterval: NodeJS.Timeout | null = null;
   private tradingSignalHandler?: (signal: TradingSignal) => Promise<void>;
   private lastSignalTime: Map<string, number> = new Map(); // Track last signal time per index
+  private processingSignals: Set<string> = new Set(); // Track signals being processed to prevent duplicates
   private riskManager = new AdvancedRiskManager();
   private performanceTracker = new PerformanceTracker();
   private errorRecoveryManager = new ErrorRecoveryManager();
@@ -375,9 +376,19 @@ class OrderService {
   }
 
   private async processSignal(signal: TradingSignal): Promise<void> {
+    const signalKey = `${signal.indexName}:${signal.optionType}`;
+
+    // ✅ PREVENT CONCURRENT PROCESSING OF SAME SIGNAL
+    if (this.processingSignals.has(signalKey)) {
+      logger.warn(`⚠️ DUPLICATE SIGNAL BLOCKED: ${signalKey} is already being processed`);
+      return;
+    }
+
+    this.processingSignals.add(signalKey);
+
     try {
       logger.info(`🎯 SIGNAL RECEIVED: ${signal.indexName} ${signal.optionType} | Confidence: ${signal.confidence.toFixed(1)}% | Strategy: ${this.getStrategyName(signal.confidence)}`);
-      
+
       // ✅ CHECK SIGNAL COOLDOWN PERIOD (prevent rapid-fire trades on same index)
       const now = Date.now();
       const lastSignalTime = this.lastSignalTime.get(signal.indexName);
@@ -414,10 +425,12 @@ class OrderService {
         return;
       }
 
-      // ✅ CHECK FOR EXISTING ACTIVE POSITIONS IN SAME INDEX (only truly active orders)
-      const existingPosition = this.activeOrders.find(order => 
-        order.signal.indexName === signal.indexName && 
-        (order.status === 'PLACED' || order.status === 'FILLED')
+      // ✅ ULTRA-STRICT CHECK FOR EXISTING POSITIONS (any active status)
+      const existingPosition = this.activeOrders.find(order =>
+        order.signal.indexName === signal.indexName &&
+        (order.status === 'PLACED' ||
+         order.status === 'FILLED' ||
+         order.status === 'PARTIAL_FILLED')
       );
 
       // Log detailed check for debugging
@@ -515,7 +528,21 @@ class OrderService {
       } else {
         // Real Trading: Same calculations, with actual money execution
         logger.info('🎯 REAL ORDER: Executing with live money...');
-        
+
+        // ✅ FINAL SAFETY CHECK - Ensure no position was created while processing
+        const lastMinuteCheck = this.activeOrders.find(order =>
+          order.signal.indexName === signal.indexName &&
+          (order.status === 'PLACED' ||
+           order.status === 'FILLED' ||
+           order.status === 'PARTIAL_FILLED')
+        );
+
+        if (lastMinuteCheck) {
+          logger.error(`🚨 RACE CONDITION DETECTED: ${signal.indexName} position created during processing!`);
+          logger.error(`   Blocking order to prevent duplicate. Existing Order: ${lastMinuteCheck.orderId}`);
+          return;
+        }
+
         const orderResponse = await this.placeRealOrder(signal, optimalQuantity);
 
         if (orderResponse.status && orderResponse.data?.orderid) {
@@ -557,9 +584,13 @@ class OrderService {
 
     } catch (error) {
       logger.error('Order processing failed:', (error as Error).message);
-      
+
       // Emit order failure event to unlock position in strategy
       (process as any).emit('orderFailed', { signal, reason: (error as Error).message });
+    } finally {
+      // ✅ ALWAYS REMOVE FROM PROCESSING SET
+      this.processingSignals.delete(signalKey);
+      logger.debug(`🔓 Released signal lock for ${signalKey}`);
     }
   }
 
@@ -2750,9 +2781,10 @@ ${pnlColor} P&L: ${pnlSign}₹${pnl.toFixed(2)}
   }
 
   public resetState(): void {
-    logger.info('🔄 ORDER SERVICE RESET: Clearing all state...');
-    
-    // Clear active orders
+    logger.info('🔄 ORDER SERVICE RESET: Ultra-aggressively clearing all state...');
+
+    // Clear active orders with reallocation
+    this.activeOrders.length = 0;
     this.activeOrders = [];
 
     // Reset all statistics
@@ -2766,13 +2798,19 @@ ${pnlColor} P&L: ${pnlSign}₹${pnl.toFixed(2)}
     this.maxDrawdown = 0;
     this.currentDrawdown = 0;
 
-    // ✅ Clear Maps to prevent memory leaks
+    // ✅ Clear Maps and Sets to prevent memory leaks
     this.lastSignalTime.clear();
+    this.processingSignals.clear();
 
-    // Reset error recovery manager state
+    // Reset error recovery manager state with new instance
     this.errorRecoveryManager = new ErrorRecoveryManager();
 
-    logger.info('🧹 Cleared all Maps and caches to prevent memory leaks');
+    // Force garbage collection if available
+    if (global.gc) {
+      global.gc();
+    }
+
+    logger.info('🧹 Ultra-aggressively cleared all Maps, Sets and caches to prevent memory leaks');
     
     // Clear any intervals if running
     if (this.monitoringInterval) {

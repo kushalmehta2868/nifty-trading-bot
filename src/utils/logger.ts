@@ -10,11 +10,11 @@ const istTimestamp = winston.format((info) => {
 });
 
 export const logger = winston.createLogger({
-  level: process.env.NODE_ENV === 'production' ? 'warn' : 'info', // Less verbose in production
+  level: process.env.NODE_ENV === 'production' ? 'error' : 'info', // Ultra minimal in production
   format: winston.format.combine(
     istTimestamp(),
-    winston.format.colorize(),
     winston.format.printf(({ timestamp, level, message, ...meta }) => {
+      // Remove colorize for production to save memory
       return `${timestamp} [${level}]: ${message} ${Object.keys(meta).length ? JSON.stringify(meta) : ''}`;
     })
   ),
@@ -22,8 +22,8 @@ export const logger = winston.createLogger({
     new winston.transports.Console(),
     new winston.transports.File({
       filename: 'trading-bot.log',
-      maxsize: 5000000, // 5MB max file size
-      maxFiles: 2, // Keep only 2 files
+      maxsize: 1000000, // Reduced to 1MB max file size
+      maxFiles: 1, // Keep only 1 file for memory conservation
       tailable: true // Overwrite old files
     })
   ]

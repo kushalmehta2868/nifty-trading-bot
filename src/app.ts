@@ -60,12 +60,12 @@ class WebSocketTradingBot {
       await webSocketFeed.initialize();
       logger.info('✅ WebSocket initialized');
 
-      // 2. Wait for WebSocket to actually connect
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      // 2. Wait for WebSocket to connect and collect initial data
+      await new Promise(resolve => setTimeout(resolve, 10000)); // Increased to 10 seconds
 
-      // 3. Initialize strategy AFTER WebSocket is ready
+      // 3. Initialize strategy AFTER WebSocket has collected sufficient data
       await strategy.initialize();
-      logger.info('✅ Strategy initialized');
+      logger.info('✅ Strategy initialized with 2-minute warmup period');
 
       // 4. Initialize other services
       await telegramBot.initialize();
@@ -245,13 +245,13 @@ class WebSocketTradingBot {
     }
   }
 
-  // ✅ Memory leak prevention - Memory monitoring
+  // ✅ Ultra-aggressive memory monitoring for Render
   private startMemoryMonitoring(): void {
     this.memoryCheckInterval = setInterval(() => {
       this.checkMemoryUsage();
-    }, 60000); // Check every 1 minute (more aggressive)
+    }, 30000); // Check every 30 seconds (ultra-aggressive)
 
-    logger.debug('🧠 Started aggressive memory monitoring');
+    logger.debug('🧠 Started ultra-aggressive memory monitoring');
   }
 
   private checkMemoryUsage(): void {
@@ -263,8 +263,8 @@ class WebSocketTradingBot {
     // Log memory usage
     logger.info(`🧠 Memory: ${heapUsedMB}MB used / ${heapTotalMB}MB heap / ${rssMB}MB RSS`);
 
-    // Alert if memory usage is high (above 150MB - very aggressive for Render)
-    if (rssMB > 150) {
+    // Ultra-aggressive cleanup at 80MB for Render free tier
+    if (rssMB > 80) {
       logger.warn(`⚠️ HIGH MEMORY USAGE: ${rssMB}MB RSS - triggering cleanup`);
       this.performEmergencyCleanup();
 
@@ -277,22 +277,23 @@ class WebSocketTradingBot {
       }
     }
 
-    // Critical memory threshold (above 200MB - much lower than before)
-    if (rssMB > 200) {
+    // Critical memory threshold (above 100MB - ultra-low for Render)
+    if (rssMB > 100) {
       logger.error(`🚨 CRITICAL MEMORY USAGE: ${rssMB}MB - performing emergency cleanup!`);
       this.performEmergencyCleanup();
 
-      // Force multiple GC cycles
+      // Force multiple aggressive GC cycles
       if (global.gc) {
-        for (let i = 0; i < 3; i++) {
+        for (let i = 0; i < 5; i++) {
           global.gc();
+          setTimeout(() => global.gc && global.gc(), 100); // Delayed GC
         }
       }
     }
   }
 
   private performEmergencyCleanup(): void {
-    logger.warn('🚨 EMERGENCY CLEANUP: Aggressively clearing memory...');
+    logger.warn('🚨 EMERGENCY CLEANUP: Ultra-aggressively clearing memory...');
 
     try {
       // Reset all service states to clear accumulated data
@@ -306,7 +307,15 @@ class WebSocketTradingBot {
       angelAPI.stopCacheCleanup();
       angelAPI.clearAllCaches();
 
-      logger.info('✅ Emergency cleanup completed');
+      // Clear any global variables that might hold references
+      if (global.gc) {
+        global.gc();
+      }
+
+      // Clear internal stats to free memory
+      this.stats = { signals: 0, successful: 0, avgConfidence: 0 };
+
+      logger.info('✅ Ultra-aggressive emergency cleanup completed');
     } catch (error) {
       logger.error('❌ Emergency cleanup failed:', (error as Error).message);
     }

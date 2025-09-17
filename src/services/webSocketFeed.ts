@@ -224,18 +224,18 @@ class WebSocketFeed {
     priceData.currentVolume = volume;
     priceData.lastUpdate = now;
 
-    // Add to price history
+    // Add to price history with ultra-conservative memory limits
     priceData.prices.push(price);
-    if (priceData.prices.length > 100) {
+    if (priceData.prices.length > 30) { // Reduced from 100 to 30 for memory
       priceData.prices.shift();
     }
 
-    // Add to volume history
+    // Add to volume history with strict limits
     if (!priceData.volumes) {
       priceData.volumes = [];
     }
     priceData.volumes.push(volume);
-    if (priceData.volumes.length > 100) {
+    if (priceData.volumes.length > 30) { // Reduced from 100 to 30 for memory
       priceData.volumes.shift();
     }
 
@@ -458,14 +458,28 @@ class WebSocketFeed {
   // ✅ Emergency memory cleanup
   public clearDataBuffers(): void {
     try {
-      // Clear all price data arrays
+      // Ultra-aggressive buffer clearing for memory conservation
       Object.keys(this.priceData).forEach(indexName => {
         const data = this.priceData[indexName as IndexName];
-        if (data.prices) data.prices = [];
-        if (data.volumes) data.volumes = [];
+        if (data.prices) {
+          data.prices.length = 0; // More efficient than reassigning
+          data.prices = data.prices.slice(); // Force reallocation
+        }
+        if (data.volumes) {
+          data.volumes.length = 0;
+          data.volumes = data.volumes.slice();
+        }
+        data.currentPrice = 0;
+        data.currentVolume = 0;
+        data.lastUpdate = 0;
       });
 
-      logger.info('🧹 Cleared WebSocket data buffers');
+      // Force garbage collection on arrays
+      if (global.gc) {
+        global.gc();
+      }
+
+      logger.info('🧹 Ultra-aggressively cleared WebSocket data buffers');
     } catch (error) {
       logger.error('Failed to clear WebSocket buffers:', (error as Error).message);
     }
