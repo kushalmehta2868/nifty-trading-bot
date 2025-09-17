@@ -17,6 +17,12 @@ class AngelAPI {
   private refreshToken: string | null = null;
   private tokensFile = 'angel-tokens.json';
 
+  // Rate limiting for searchScrips API
+  private lastSearchScripCall = 0;
+  private searchScripCache = new Map<string, { data: any; timestamp: number }>();
+  private readonly SEARCH_SCRIP_DELAY = 1000; // 1 second between calls
+  private readonly CACHE_DURATION = 300000; // 5 minutes cache
+
   get jwtToken(): string | null {
     return this._jwtToken;
   }
@@ -309,12 +315,31 @@ class AngelAPI {
     });
   }
 
-  // Search for option contracts
+  // Search for option contracts with rate limiting and caching
   public async searchScrips(
     exchange: string,
     searchtext: string
   ): Promise<any> {
     try {
+      const cacheKey = `${exchange}:${searchtext}`;
+
+      // Check cache first
+      const cached = this.searchScripCache.get(cacheKey);
+      if (cached && (Date.now() - cached.timestamp) < this.CACHE_DURATION) {
+        logger.info(`📋 Using cached scrip data for ${searchtext}`);
+        return cached.data;
+      }
+
+      // Rate limiting: ensure minimum delay between calls
+      const now = Date.now();
+      const timeSinceLastCall = now - this.lastSearchScripCall;
+      if (timeSinceLastCall < this.SEARCH_SCRIP_DELAY) {
+        const delayNeeded = this.SEARCH_SCRIP_DELAY - timeSinceLastCall;
+        logger.info(`⏱️ Rate limiting: waiting ${delayNeeded}ms before searchScrip call`);
+        await new Promise(resolve => setTimeout(resolve, delayNeeded));
+      }
+
+      this.lastSearchScripCall = Date.now();
       logger.info(`🔍 Searching scrips: exchange=${exchange}, symbol=${searchtext}`);
 
       // ✅ Fixed parameter name from 'searchtext' to 'searchscrip'
@@ -322,6 +347,14 @@ class AngelAPI {
         exchange,
         searchscrip: searchtext // Correct parameter name as per Angel One API docs
       });
+
+      // Cache the response if successful
+      if (response && response.data) {
+        this.searchScripCache.set(cacheKey, {
+          data: response,
+          timestamp: Date.now()
+        });
+      }
 
       // ✅ Enhanced response logging
       if (response) {
