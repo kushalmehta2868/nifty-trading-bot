@@ -21,6 +21,7 @@ class WebSocketTradingBot {
   private dailySummaryTimeout: NodeJS.Timeout | null = null;
   private marketOpenTimeout: NodeJS.Timeout | null = null;
   private heartbeatInterval: NodeJS.Timeout | null = null;
+  private memoryCheckInterval: NodeJS.Timeout | null = null;
 
   public async start(): Promise<void> {
     try {
@@ -77,6 +78,7 @@ class WebSocketTradingBot {
       await telegramBot.sendMessage('🔄 FRESH START: All data cleared, positions reset, statistics zeroed. Bot is completely fresh and ready for trading!');
 
       this.isRunning = true;
+      this.startMemoryMonitoring();
       logger.info('✅ All services initialized successfully with comprehensive monitoring');
 
     } catch (error) {
@@ -176,8 +178,9 @@ class WebSocketTradingBot {
       this.marketOpenTimeout = null;
     }
 
-    // Stop heartbeat
+    // Stop heartbeat and memory monitoring
     this.stopHeartbeat();
+    this.stopMemoryMonitoring();
 
     // Disconnect services
     webSocketFeed.disconnect();
@@ -238,6 +241,51 @@ class WebSocketTradingBot {
       clearInterval(this.heartbeatInterval);
       this.heartbeatInterval = null;
       logger.debug('⏰ Heartbeat logger stopped');
+    }
+  }
+
+  // ✅ Memory leak prevention - Memory monitoring
+  private startMemoryMonitoring(): void {
+    this.memoryCheckInterval = setInterval(() => {
+      this.checkMemoryUsage();
+    }, 300000); // Check every 5 minutes
+
+    logger.debug('🧠 Started memory monitoring');
+  }
+
+  private checkMemoryUsage(): void {
+    const memUsage = process.memoryUsage();
+    const heapUsedMB = Math.round(memUsage.heapUsed / 1024 / 1024);
+    const heapTotalMB = Math.round(memUsage.heapTotal / 1024 / 1024);
+    const rssMB = Math.round(memUsage.rss / 1024 / 1024);
+
+    // Log memory usage
+    logger.info(`🧠 Memory: ${heapUsedMB}MB used / ${heapTotalMB}MB heap / ${rssMB}MB RSS`);
+
+    // Alert if memory usage is high (above 400MB)
+    if (rssMB > 400) {
+      logger.warn(`⚠️ HIGH MEMORY USAGE: ${rssMB}MB RSS - may need optimization`);
+
+      // Force garbage collection if available
+      if (global.gc) {
+        global.gc();
+        const afterGC = process.memoryUsage();
+        const newRSS = Math.round(afterGC.rss / 1024 / 1024);
+        logger.info(`🧹 Garbage collection: ${rssMB}MB → ${newRSS}MB RSS`);
+      }
+    }
+
+    // Critical memory threshold (above 800MB)
+    if (rssMB > 800) {
+      logger.error(`🚨 CRITICAL MEMORY USAGE: ${rssMB}MB - Bot may crash soon!`);
+    }
+  }
+
+  private stopMemoryMonitoring(): void {
+    if (this.memoryCheckInterval) {
+      clearInterval(this.memoryCheckInterval);
+      this.memoryCheckInterval = null;
+      logger.debug('🛑 Stopped memory monitoring');
     }
   }
 }

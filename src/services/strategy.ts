@@ -788,7 +788,7 @@ class TradingStrategy {
 
 
       // Get option token first
-      const tokenResponse = await angelAPI.getOptionToken(
+      let tokenResponse = await angelAPI.getOptionToken(
         signal.indexName,
         strike,
         signal.optionType,
@@ -796,8 +796,24 @@ class TradingStrategy {
       );
 
       if (!tokenResponse) {
-        logger.error(`CRITICAL: Could not get token for ${signal.optionSymbol} with expiry ${expiry}`);
-        throw new Error(`Option token lookup failed for ${signal.indexName} expiry ${expiry}`);
+        logger.warn(`⚠️ API token fetch failed for ${signal.optionSymbol}, trying master data fallback...`);
+
+        // Try to get token from master data directly
+        const strike = this.extractStrikeFromSymbol(signal.optionSymbol, signal.indexName);
+        const masterToken = await angelAPI.getOptionTokenFromMaster(
+          signal.indexName,
+          expiry,
+          strike,
+          signal.optionType
+        );
+
+        if (masterToken) {
+          logger.info(`✅ Found token in master data: ${masterToken} for ${signal.optionSymbol}`);
+          tokenResponse = masterToken;
+        } else {
+          logger.error(`CRITICAL: Could not get token for ${signal.optionSymbol} from API or master data`);
+          throw new Error(`Option token lookup failed for ${signal.indexName} expiry ${expiry}`);
+        }
       }
 
       // Fetch real option price using token

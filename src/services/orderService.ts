@@ -693,7 +693,7 @@ class OrderService {
       const expiry = this.generateExpiryString(signal.indexName);
       const strike = this.extractStrikeFromSymbol(signal.optionSymbol, signal.indexName);
 
-      const symbolToken = await angelAPI.getOptionToken(
+      let symbolToken = await angelAPI.getOptionToken(
         signal.indexName,
         strike,
         signal.optionType,
@@ -701,7 +701,22 @@ class OrderService {
       );
 
       if (!symbolToken) {
-        throw new Error('Symbol token lookup failed');
+        logger.warn(`⚠️ API token fetch failed for ${signal.optionSymbol}, trying master data fallback...`);
+
+        // Try to get token from master data directly
+        const masterToken = await angelAPI.getOptionTokenFromMaster(
+          signal.indexName,
+          expiry,
+          strike,
+          signal.optionType
+        );
+
+        if (masterToken) {
+          logger.info(`✅ Found token in master data: ${masterToken} for ${signal.optionSymbol}`);
+          symbolToken = masterToken;
+        } else {
+          throw new Error('Symbol token lookup failed in both API and master data');
+        }
       }
 
       // Smart pricing with slippage protection
@@ -1587,6 +1602,24 @@ ${Object.keys(healthStatus).length === 0 ? '✅ All systems operational' :
               'OPTION_PRICE_FETCH'
             );
             if (price) currentPrice = price;
+          } else {
+            // Try master data fallback for token
+            logger.debug(`⚠️ API token fetch failed, trying master data for ${activeOrder.signal.optionSymbol}...`);
+            const masterToken = await angelAPI.getOptionTokenFromMaster(
+              activeOrder.signal.indexName,
+              expiry,
+              strike,
+              activeOrder.signal.optionType
+            );
+
+            if (masterToken) {
+              logger.debug(`✅ Found token in master data: ${masterToken}`);
+              const price = await this.errorRecoveryManager.executeWithRecovery(
+                () => angelAPI.getOptionPrice(activeOrder.signal.optionSymbol, masterToken),
+                'OPTION_PRICE_FETCH'
+              );
+              if (price) currentPrice = price;
+            }
           }
         }
       } catch (apiError) {
@@ -1615,8 +1648,40 @@ ${Object.keys(healthStatus).length === 0 ? '✅ All systems operational' :
         }
       }
       
+      // Method 4: Final fallback - use trade book if available
+      if (!currentPrice || currentPrice <= 0) {
+        try {
+          const tradeBookResponse = await angelAPI.getTradeBook();
+          if (tradeBookResponse?.data) {
+            const lastTrade = tradeBookResponse.data
+              .filter((trade: any) => trade.tradingsymbol === activeOrder.signal.optionSymbol)
+              .sort((a: any, b: any) => new Date(b.filltime || b.exchangetime).getTime() - new Date(a.filltime || a.exchangetime).getTime())[0];
+
+            if (lastTrade) {
+              currentPrice = parseFloat(lastTrade.fillprice || lastTrade.price);
+              logger.info(`📊 Using last trade price for ${activeOrder.signal.optionSymbol}: ₹${currentPrice}`);
+            }
+          }
+        } catch (tradeBookError) {
+          logger.debug(`Trade book fallback failed: ${(tradeBookError as Error).message}`);
+        }
+      }
+
       if (!currentPrice || currentPrice <= 0) {
         logger.error(`❌ PRICE FETCH FAILED: Cannot determine current price for ${activeOrder.signal.optionSymbol} - skipping exit check`);
+        logger.error(`All methods failed: API quote, direct fetch, time decay estimation, and trade book lookup`);
+
+        // Check if this is an extreme OTM option that might not exist
+        const symbolMatch = activeOrder.signal.optionSymbol.match(/(\d+)(CE|PE)$/);
+        if (symbolMatch) {
+          const strike = parseInt(symbolMatch[1]);
+          const optionType = symbolMatch[2];
+          logger.warn(`⚠️ Strike ${strike} ${optionType} might be too far OTM or non-existent`);
+
+          // Suggest this order should be manually reviewed
+          logger.warn(`📋 MANUAL REVIEW REQUIRED: Position may need manual exit due to price fetch failure`);
+        }
+
         return;
       }
       
@@ -2689,7 +2754,7 @@ ${pnlColor} P&L: ${pnlSign}₹${pnl.toFixed(2)}
     
     // Clear active orders
     this.activeOrders = [];
-    
+
     // Reset all statistics
     this.dailyTrades = 0;
     this.dailyPnL = 0;
@@ -2700,6 +2765,14 @@ ${pnlColor} P&L: ${pnlSign}₹${pnl.toFixed(2)}
     this.totalHoldingTime = 0;
     this.maxDrawdown = 0;
     this.currentDrawdown = 0;
+
+    // ✅ Clear Maps to prevent memory leaks
+    this.lastSignalTime.clear();
+
+    // Reset error recovery manager state
+    this.errorRecoveryManager = new ErrorRecoveryManager();
+
+    logger.info('🧹 Cleared all Maps and caches to prevent memory leaks');
     
     // Clear any intervals if running
     if (this.monitoringInterval) {

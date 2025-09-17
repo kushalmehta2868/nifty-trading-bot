@@ -20,6 +20,7 @@ class AngelAPI {
   // Rate limiting for searchScrips API
   private lastSearchScripCall = 0;
   private searchScripCache = new Map<string, { data: any; timestamp: number }>();
+  private cacheCleanupInterval: NodeJS.Timeout | null = null;
   private readonly SEARCH_SCRIP_DELAY = 1000; // 1 second between calls
   private readonly CACHE_DURATION = 300000; // 5 minutes cache
 
@@ -118,6 +119,7 @@ class AngelAPI {
       this._feedToken = tokens.feedToken;
       this.refreshToken = tokens.refreshToken;
       this.isAuthenticated = true;
+      this.startCacheCleanup();
 
       logger.info('✅ Loaded stored Angel tokens');
       return true;
@@ -180,6 +182,7 @@ class AngelAPI {
 
         fs.writeFileSync(this.tokensFile, JSON.stringify(tokens, null, 2));
         this.isAuthenticated = true;
+        this.startCacheCleanup();
 
         logger.info('✅ Fresh Angel login successful');
         logger.info(`JWT Token: ${this._jwtToken.substring(0, 20)}...`);
@@ -466,6 +469,13 @@ class AngelAPI {
     symbolToken: string
   ): Promise<number | null> {
     try {
+      logger.info(`🔍 Getting option price for ${tradingSymbol} with token: ${symbolToken}`);
+
+      if (!symbolToken) {
+        logger.error(`❌ No symbol token provided for ${tradingSymbol}`);
+        return null;
+      }
+
       const response = await this.getQuote('NFO', tradingSymbol, symbolToken);
       logger.debug("Quote response for price extraction:", response);
       
@@ -488,7 +498,21 @@ class AngelAPI {
 
       // Enhanced error logging
       logger.error(`❌ Could not extract valid price for ${tradingSymbol}`);
+      logger.error(`Token used: ${symbolToken}`);
       logger.error(`Available fields in response:`, Object.keys(response || {}));
+
+      if (response) {
+        logger.error(`Response data:`, {
+          ltp: response.ltp,
+          close: response.close,
+          last_price: response.last_price,
+          lasttradedprice: response.lasttradedprice,
+          status: response.status,
+          message: response.message,
+          errorcode: response.errorcode
+        });
+      }
+
       return null;
       
     } catch (error) {
@@ -623,7 +647,7 @@ class AngelAPI {
   }
 
   // ✅ New method to get token from master data file
-  private async getOptionTokenFromMaster(
+  public async getOptionTokenFromMaster(
     baseSymbol: string,
     expiry: string,
     strike: number,
@@ -1320,7 +1344,50 @@ class AngelAPI {
     }
   }
 
+  // ✅ Memory leak prevention - Cache cleanup methods
+  private startCacheCleanup(): void {
+    if (this.cacheCleanupInterval) {
+      clearInterval(this.cacheCleanupInterval);
+    }
 
+    // Clean cache every 10 minutes
+    this.cacheCleanupInterval = setInterval(() => {
+      this.cleanupCache();
+    }, 600000); // 10 minutes
+
+    logger.debug('📋 Started cache cleanup interval');
+  }
+
+  private cleanupCache(): void {
+    const now = Date.now();
+    let cleaned = 0;
+
+    // Remove expired cache entries
+    for (const [key, value] of this.searchScripCache.entries()) {
+      if (now - value.timestamp > this.CACHE_DURATION) {
+        this.searchScripCache.delete(key);
+        cleaned++;
+      }
+    }
+
+    if (cleaned > 0) {
+      logger.debug(`🧹 Cleaned ${cleaned} expired cache entries. Cache size: ${this.searchScripCache.size}`);
+    }
+
+    // Force garbage collection if cache gets too large
+    if (this.searchScripCache.size > 1000) {
+      logger.warn(`⚠️ Cache size large (${this.searchScripCache.size}), clearing all entries`);
+      this.searchScripCache.clear();
+    }
+  }
+
+  public stopCacheCleanup(): void {
+    if (this.cacheCleanupInterval) {
+      clearInterval(this.cacheCleanupInterval);
+      this.cacheCleanupInterval = null;
+      logger.debug('🛑 Stopped cache cleanup interval');
+    }
+  }
 
 }
 
