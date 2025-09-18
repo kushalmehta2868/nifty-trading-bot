@@ -19,12 +19,7 @@ export const logger = winston.createLogger({
     })
   ),
   transports: [
-    new winston.transports.Console(),
-    new winston.transports.File({
-      filename: 'trading-bot.log',
-      maxsize: 1000000, // Reduced to 1MB max file size
-      maxFiles: 1, // Keep only 1 file for memory conservation
-      tailable: true // Overwrite old files
-    })
+    new winston.transports.Console()
+    // Removed file logging completely to save memory in production
   ]
 });

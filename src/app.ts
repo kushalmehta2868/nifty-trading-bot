@@ -271,8 +271,8 @@ class WebSocketTradingBot {
     // Log memory usage
     logger.info(`🧠 Memory: ${heapUsedMB}MB used / ${heapTotalMB}MB heap / ${rssMB}MB RSS`);
 
-    // Ultra-aggressive cleanup at 50MB for Render free tier
-    if (rssMB > 50) {
+    // Ultra-aggressive cleanup at 40MB for Render free tier
+    if (rssMB > 40) {
       logger.warn(`⚠️ HIGH MEMORY USAGE: ${rssMB}MB RSS - triggering cleanup`);
       this.performEmergencyCleanup();
 
@@ -285,8 +285,8 @@ class WebSocketTradingBot {
       }
     }
 
-    // Critical memory threshold (above 70MB - ultra-low for Render)
-    if (rssMB > 70) {
+    // Critical memory threshold (above 60MB - ultra-low for Render)
+    if (rssMB > 60) {
       logger.error(`🚨 CRITICAL MEMORY USAGE: ${rssMB}MB - performing emergency cleanup!`);
       this.performEmergencyCleanup();
 
@@ -302,7 +302,7 @@ class WebSocketTradingBot {
       setTimeout(() => {
         const afterCleanup = process.memoryUsage();
         const finalRSS = Math.round(afterCleanup.rss / 1024 / 1024);
-        if (finalRSS > 90) {
+        if (finalRSS > 80) {
           console.error(`🚨 EMERGENCY SHUTDOWN: Memory still at ${finalRSS}MB after cleanup`);
           process.exit(1);
         }
