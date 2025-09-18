@@ -27,6 +27,11 @@ class WebSocketTradingBot {
   public async start(): Promise<void> {
     try {
       console.log('🚀 WebSocket Trading Bot Starting...'); // Direct console log for visibility
+
+      // Check initial memory
+      const initialMem = process.memoryUsage();
+      console.log(`📊 Initial Memory: ${Math.round(initialMem.rss / 1024 / 1024)}MB RSS`);
+
       logger.info('🚀 WebSocket Trading Bot Starting...');
 
       // ✅ STEP 1: COMPLETE STARTUP RESET - Everything fresh
@@ -252,9 +257,9 @@ class WebSocketTradingBot {
   private startMemoryMonitoring(): void {
     this.memoryCheckInterval = setInterval(() => {
       this.checkMemoryUsage();
-    }, 30000); // Check every 30 seconds (ultra-aggressive)
+    }, 15000); // Check every 15 seconds (extremely aggressive)
 
-    logger.debug('🧠 Started ultra-aggressive memory monitoring');
+    logger.debug('🧠 Started extremely aggressive memory monitoring');
   }
 
   private checkMemoryUsage(): void {
@@ -266,8 +271,8 @@ class WebSocketTradingBot {
     // Log memory usage
     logger.info(`🧠 Memory: ${heapUsedMB}MB used / ${heapTotalMB}MB heap / ${rssMB}MB RSS`);
 
-    // Ultra-aggressive cleanup at 80MB for Render free tier
-    if (rssMB > 80) {
+    // Ultra-aggressive cleanup at 50MB for Render free tier
+    if (rssMB > 50) {
       logger.warn(`⚠️ HIGH MEMORY USAGE: ${rssMB}MB RSS - triggering cleanup`);
       this.performEmergencyCleanup();
 
@@ -280,8 +285,8 @@ class WebSocketTradingBot {
       }
     }
 
-    // Critical memory threshold (above 100MB - ultra-low for Render)
-    if (rssMB > 100) {
+    // Critical memory threshold (above 70MB - ultra-low for Render)
+    if (rssMB > 70) {
       logger.error(`🚨 CRITICAL MEMORY USAGE: ${rssMB}MB - performing emergency cleanup!`);
       this.performEmergencyCleanup();
 
@@ -292,6 +297,16 @@ class WebSocketTradingBot {
           setTimeout(() => global.gc && global.gc(), 100); // Delayed GC
         }
       }
+
+      // Emergency shutdown if still above critical threshold after cleanup
+      setTimeout(() => {
+        const afterCleanup = process.memoryUsage();
+        const finalRSS = Math.round(afterCleanup.rss / 1024 / 1024);
+        if (finalRSS > 90) {
+          console.error(`🚨 EMERGENCY SHUTDOWN: Memory still at ${finalRSS}MB after cleanup`);
+          process.exit(1);
+        }
+      }, 5000);
     }
   }
 

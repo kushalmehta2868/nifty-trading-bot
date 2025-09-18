@@ -5,7 +5,7 @@
     "main": "src/app.js",
     "scripts": {
         "start": "NODE_ENV=production node --expose-gc --max-old-space-size=128 --max-semi-space-size=4 --optimize-for-size --gc-interval=100 dist/app.js",
-        "start:ts": "cross-env NODE_ENV=production node --expose-gc --max-old-space-size=128 --max-semi-space-size=4 --optimize-for-size -r ts-node/register src/app.ts",
+        "start:ts": "cross-env NODE_ENV=production node --expose-gc --max-old-space-size=80 --max-semi-space-size=2 --optimize-for-size --gc-global -r ts-node/register src/app.ts",
         "dev": "nodemon --exec ts-node src/app.ts",
         "build": "npm run clean && tsc",
         "kill-bot": "taskkill /F /IM node.exe 2>nul || echo No Node.js processes found",

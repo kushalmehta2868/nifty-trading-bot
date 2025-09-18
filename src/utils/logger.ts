@@ -10,7 +10,7 @@ const istTimestamp = winston.format((info) => {
 });
 
 export const logger = winston.createLogger({
-  level: process.env.NODE_ENV === 'production' ? 'info' : 'info', // Keep info logs for initialization visibility
+  level: process.env.NODE_ENV === 'production' ? 'warn' : 'info', // Minimize logging in production for memory
   format: winston.format.combine(
     istTimestamp(),
     winston.format.printf(({ timestamp, level, message, ...meta }) => {

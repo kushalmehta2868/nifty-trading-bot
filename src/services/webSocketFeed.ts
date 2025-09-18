@@ -224,18 +224,18 @@ class WebSocketFeed {
     priceData.currentVolume = volume;
     priceData.lastUpdate = now;
 
-    // Add to price history with ultra-conservative memory limits
+    // Add to price history with extremely conservative memory limits
     priceData.prices.push(price);
-    if (priceData.prices.length > 30) { // Reduced from 100 to 30 for memory
+    if (priceData.prices.length > 15) { // Reduced from 30 to 15 for extreme memory conservation
       priceData.prices.shift();
     }
 
-    // Add to volume history with strict limits
+    // Add to volume history with extremely strict limits
     if (!priceData.volumes) {
       priceData.volumes = [];
     }
     priceData.volumes.push(volume);
-    if (priceData.volumes.length > 30) { // Reduced from 100 to 30 for memory
+    if (priceData.volumes.length > 15) { // Reduced from 30 to 15 for extreme memory conservation
       priceData.volumes.shift();
     }
 
