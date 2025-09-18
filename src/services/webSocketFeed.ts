@@ -224,19 +224,21 @@ class WebSocketFeed {
     priceData.currentVolume = volume;
     priceData.lastUpdate = now;
 
-    // Add to price history with minimal memory footprint
+    // Add to price history with extreme minimal footprint for Render
     priceData.prices.push(price);
-    if (priceData.prices.length > 10) { // Reduced to absolute minimum for Render
+    if (priceData.prices.length > 5) { // Absolute minimum for Render free tier
       priceData.prices.shift();
     }
 
-    // Add to volume history with minimal footprint
-    if (!priceData.volumes) {
-      priceData.volumes = [];
-    }
-    priceData.volumes.push(volume);
-    if (priceData.volumes.length > 10) { // Reduced to absolute minimum for Render
-      priceData.volumes.shift();
+    // Skip volume history in production to save memory
+    if (process.env.NODE_ENV !== 'production') {
+      if (!priceData.volumes) {
+        priceData.volumes = [];
+      }
+      priceData.volumes.push(volume);
+      if (priceData.volumes.length > 5) {
+        priceData.volumes.shift();
+      }
     }
 
     // Notify subscribers

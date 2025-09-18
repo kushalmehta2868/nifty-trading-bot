@@ -47,8 +47,10 @@ class WebSocketTradingBot {
       // Start health server first
       healthServer.start();
 
-      // Initialize daily cleanup manager
-      dailyCleanup.initialize();
+      // Skip daily cleanup manager in production to save memory
+      if (process.env.NODE_ENV !== 'production') {
+        dailyCleanup.initialize();
+      }
 
       // Check market hours
       if (!isMarketOpen()) {
@@ -77,8 +79,10 @@ class WebSocketTradingBot {
       await telegramBot.initialize();
       await orderService.initialize();
 
-      // 5. Initialize Health Monitor
-      await healthMonitor.initialize();
+      // 5. Skip Health Monitor in production to save memory
+      if (process.env.NODE_ENV !== 'production') {
+        await healthMonitor.initialize();
+      }
 
       // 6. Send startup notification with reset confirmation
       await telegramBot.sendStartupMessage();
@@ -257,9 +261,9 @@ class WebSocketTradingBot {
   private startMemoryMonitoring(): void {
     this.memoryCheckInterval = setInterval(() => {
       this.checkMemoryUsage();
-    }, 15000); // Check every 15 seconds (extremely aggressive)
+    }, 10000); // Check every 10 seconds (maximum aggression)
 
-    logger.debug('🧠 Started extremely aggressive memory monitoring');
+    console.log('🧠 Started maximum aggressive memory monitoring');
   }
 
   private checkMemoryUsage(): void {
@@ -268,11 +272,11 @@ class WebSocketTradingBot {
     const heapTotalMB = Math.round(memUsage.heapTotal / 1024 / 1024);
     const rssMB = Math.round(memUsage.rss / 1024 / 1024);
 
-    // Log memory usage
-    logger.info(`🧠 Memory: ${heapUsedMB}MB used / ${heapTotalMB}MB heap / ${rssMB}MB RSS`);
+    // Log memory usage only via console to avoid logger overhead
+    console.log(`🧠 Memory: ${heapUsedMB}MB used / ${heapTotalMB}MB heap / ${rssMB}MB RSS`);
 
-    // Ultra-aggressive cleanup at 40MB for Render free tier
-    if (rssMB > 40) {
+    // Ultra-aggressive cleanup at 30MB for Render free tier
+    if (rssMB > 30) {
       logger.warn(`⚠️ HIGH MEMORY USAGE: ${rssMB}MB RSS - triggering cleanup`);
       this.performEmergencyCleanup();
 
@@ -285,8 +289,8 @@ class WebSocketTradingBot {
       }
     }
 
-    // Critical memory threshold (above 60MB - ultra-low for Render)
-    if (rssMB > 60) {
+    // Critical memory threshold (above 45MB - ultra-low for Render)
+    if (rssMB > 45) {
       logger.error(`🚨 CRITICAL MEMORY USAGE: ${rssMB}MB - performing emergency cleanup!`);
       this.performEmergencyCleanup();
 
@@ -302,7 +306,7 @@ class WebSocketTradingBot {
       setTimeout(() => {
         const afterCleanup = process.memoryUsage();
         const finalRSS = Math.round(afterCleanup.rss / 1024 / 1024);
-        if (finalRSS > 80) {
+        if (finalRSS > 50) {
           console.error(`🚨 EMERGENCY SHUTDOWN: Memory still at ${finalRSS}MB after cleanup`);
           process.exit(1);
         }
