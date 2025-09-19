@@ -28,24 +28,39 @@ class WebSocketTradingBot {
     try {
       console.log('🚀 WebSocket Trading Bot Starting...'); // Direct console log for visibility
 
-      // Check initial memory
+      // Check initial memory and force early GC
+      if (global.gc) {
+        global.gc();
+        global.gc();
+      }
       const initialMem = process.memoryUsage();
-      console.log(`📊 Initial Memory: ${Math.round(initialMem.rss / 1024 / 1024)}MB RSS`);
+      console.log(`📊 Initial Memory: ${Math.round(initialMem.rss / 1024 / 1024)}MB RSS, Heap: ${Math.round(initialMem.heapUsed / 1024 / 1024)}MB`);
+
+      if (initialMem.rss > 50 * 1024 * 1024) { // 50MB
+        console.error(`🚨 STARTUP MEMORY TOO HIGH: ${Math.round(initialMem.rss / 1024 / 1024)}MB - shutting down`);
+        process.exit(1);
+      }
 
       logger.info('🚀 WebSocket Trading Bot Starting...');
 
-      // ✅ STEP 1: COMPLETE STARTUP RESET - Everything fresh
-      await startupReset.performFullReset();
-      
+      // ✅ STEP 1: Skip expensive startup reset in production to save memory
+      if (process.env.NODE_ENV !== 'production') {
+        await startupReset.performFullReset();
+        await startupReset.validateFreshStart();
+      }
+
       // Reset all service states
       strategy.resetState();
       orderService.resetState();
-      
-      // Validate fresh start
-      await startupReset.validateFreshStart();
 
-      // Start health server first
-      healthServer.start();
+      // Check memory after reset
+      const afterResetMem = process.memoryUsage();
+      console.log(`📊 After Reset: ${Math.round(afterResetMem.rss / 1024 / 1024)}MB RSS`);
+
+      // Skip health server in production to save memory
+      if (process.env.NODE_ENV !== 'production') {
+        healthServer.start();
+      }
 
       // Skip daily cleanup manager in production to save memory
       if (process.env.NODE_ENV !== 'production') {
@@ -66,31 +81,55 @@ class WebSocketTradingBot {
 
       // 1. Initialize WebSocket FIRST
       await webSocketFeed.initialize();
-      logger.info('✅ WebSocket initialized');
+      console.log('✅ WebSocket initialized');
 
-      // 2. Wait for WebSocket to connect and collect initial data
-      await new Promise(resolve => setTimeout(resolve, 10000)); // Increased to 10 seconds
+      // Check memory after WebSocket
+      const afterWSMem = process.memoryUsage();
+      console.log(`📊 After WebSocket: ${Math.round(afterWSMem.rss / 1024 / 1024)}MB RSS`);
+
+      // 2. Reduce wait time to save memory
+      await new Promise(resolve => setTimeout(resolve, 5000)); // Reduced to 5 seconds
 
       // 3. Initialize strategy AFTER WebSocket has collected sufficient data
       await strategy.initialize();
-      logger.info('✅ Strategy initialized with 2-minute warmup period');
+      console.log('✅ Strategy initialized');
+
+      // Check memory after strategy
+      const afterStrategyMem = process.memoryUsage();
+      console.log(`📊 After Strategy: ${Math.round(afterStrategyMem.rss / 1024 / 1024)}MB RSS`);
 
       // 4. Initialize other services
       await telegramBot.initialize();
       await orderService.initialize();
+
+      // Check memory after services
+      const afterServicesMem = process.memoryUsage();
+      console.log(`📊 After Services: ${Math.round(afterServicesMem.rss / 1024 / 1024)}MB RSS`);
 
       // 5. Skip Health Monitor in production to save memory
       if (process.env.NODE_ENV !== 'production') {
         await healthMonitor.initialize();
       }
 
-      // 6. Send startup notification with reset confirmation
+      // 6. Send startup notification
       await telegramBot.sendStartupMessage();
-      await telegramBot.sendMessage('🔄 FRESH START: All data cleared, positions reset, statistics zeroed. Bot is completely fresh and ready for trading!');
+      if (process.env.NODE_ENV !== 'production') {
+        await telegramBot.sendMessage('🔄 FRESH START: All data cleared, positions reset, statistics zeroed. Bot is completely fresh and ready for trading!');
+      }
 
       this.isRunning = true;
       this.startMemoryMonitoring();
-      logger.info('✅ All services initialized successfully with comprehensive monitoring');
+
+      // Final memory check
+      const finalMem = process.memoryUsage();
+      console.log(`📊 Final Startup Memory: ${Math.round(finalMem.rss / 1024 / 1024)}MB RSS`);
+
+      if (finalMem.rss > 40 * 1024 * 1024) { // 40MB
+        console.error(`🚨 STARTUP MEMORY LEAK DETECTED: ${Math.round(finalMem.rss / 1024 / 1024)}MB - performing emergency cleanup`);
+        this.performEmergencyCleanup();
+      }
+
+      console.log('✅ All services initialized with memory monitoring');
 
     } catch (error) {
       console.error('❌ STARTUP FAILED:', (error as Error).message); // Direct console error
@@ -275,8 +314,8 @@ class WebSocketTradingBot {
     // Log memory usage only via console to avoid logger overhead
     console.log(`🧠 Memory: ${heapUsedMB}MB used / ${heapTotalMB}MB heap / ${rssMB}MB RSS`);
 
-    // Ultra-aggressive cleanup at 30MB for Render free tier
-    if (rssMB > 30) {
+    // Ultra-aggressive cleanup at 25MB for Render free tier
+    if (rssMB > 25) {
       logger.warn(`⚠️ HIGH MEMORY USAGE: ${rssMB}MB RSS - triggering cleanup`);
       this.performEmergencyCleanup();
 
@@ -289,8 +328,8 @@ class WebSocketTradingBot {
       }
     }
 
-    // Critical memory threshold (above 45MB - ultra-low for Render)
-    if (rssMB > 45) {
+    // Critical memory threshold (above 35MB - ultra-low for Render)
+    if (rssMB > 35) {
       logger.error(`🚨 CRITICAL MEMORY USAGE: ${rssMB}MB - performing emergency cleanup!`);
       this.performEmergencyCleanup();
 
@@ -306,7 +345,7 @@ class WebSocketTradingBot {
       setTimeout(() => {
         const afterCleanup = process.memoryUsage();
         const finalRSS = Math.round(afterCleanup.rss / 1024 / 1024);
-        if (finalRSS > 50) {
+        if (finalRSS > 40) {
           console.error(`🚨 EMERGENCY SHUTDOWN: Memory still at ${finalRSS}MB after cleanup`);
           process.exit(1);
         }
