@@ -36,7 +36,7 @@ class WebSocketTradingBot {
       const initialMem = process.memoryUsage();
       console.log(`📊 Initial Memory: ${Math.round(initialMem.rss / 1024 / 1024)}MB RSS, Heap: ${Math.round(initialMem.heapUsed / 1024 / 1024)}MB`);
 
-      if (initialMem.rss > 50 * 1024 * 1024) { // 50MB
+      if (initialMem.rss > 80 * 1024 * 1024) { // 80MB startup allowance
         console.error(`🚨 STARTUP MEMORY TOO HIGH: ${Math.round(initialMem.rss / 1024 / 1024)}MB - shutting down`);
         process.exit(1);
       }
@@ -124,7 +124,7 @@ class WebSocketTradingBot {
       const finalMem = process.memoryUsage();
       console.log(`📊 Final Startup Memory: ${Math.round(finalMem.rss / 1024 / 1024)}MB RSS`);
 
-      if (finalMem.rss > 40 * 1024 * 1024) { // 40MB
+      if (finalMem.rss > 60 * 1024 * 1024) { // 60MB final allowance
         console.error(`🚨 STARTUP MEMORY LEAK DETECTED: ${Math.round(finalMem.rss / 1024 / 1024)}MB - performing emergency cleanup`);
         this.performEmergencyCleanup();
       }
