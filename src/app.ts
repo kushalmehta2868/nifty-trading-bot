@@ -79,46 +79,89 @@ class WebSocketTradingBot {
 
       // ✅ CORRECT INITIALIZATION ORDER:
 
-      // 1. Initialize WebSocket FIRST
-      await webSocketFeed.initialize();
-      console.log('✅ WebSocket initialized');
+      // PHASE 1: Test WebSocket only
+      console.log('🔍 PHASE 1: Testing WebSocket only...');
 
-      // Check memory after WebSocket
-      const afterWSMem = process.memoryUsage();
-      console.log(`📊 After WebSocket: ${Math.round(afterWSMem.rss / 1024 / 1024)}MB RSS`);
+      try {
+        await webSocketFeed.initialize();
+        console.log('✅ WebSocket initialized');
+        const afterWSMem = process.memoryUsage();
+        console.log(`📊 After WebSocket: ${Math.round(afterWSMem.rss / 1024 / 1024)}MB RSS`);
 
-      // 2. Reduce wait time to save memory
-      await new Promise(resolve => setTimeout(resolve, 5000)); // Reduced to 5 seconds
+        if (afterWSMem.rss > 80 * 1024 * 1024) {
+          console.error('🚨 WEBSOCKET IS THE MEMORY LEAK!');
+          process.exit(1);
+        }
+      } catch (error) {
+        console.error('❌ WebSocket failed:', (error as Error).message);
+      }
 
-      // 3. Initialize strategy AFTER WebSocket has collected sufficient data
-      await strategy.initialize();
-      console.log('✅ Strategy initialized');
+      // PHASE 2: Test Telegram Bot
+      console.log('🔍 PHASE 2: Testing Telegram Bot...');
+      try {
+        await telegramBot.initialize();
+        console.log('✅ Telegram initialized');
+        const afterTelegramMem = process.memoryUsage();
+        console.log(`📊 After Telegram: ${Math.round(afterTelegramMem.rss / 1024 / 1024)}MB RSS`);
 
-      // Check memory after strategy
-      const afterStrategyMem = process.memoryUsage();
-      console.log(`📊 After Strategy: ${Math.round(afterStrategyMem.rss / 1024 / 1024)}MB RSS`);
+        if (afterTelegramMem.rss > 80 * 1024 * 1024) {
+          console.error('🚨 TELEGRAM IS THE MEMORY LEAK!');
+          process.exit(1);
+        }
+      } catch (error) {
+        console.error('❌ Telegram failed:', (error as Error).message);
+      }
 
-      // 4. Initialize other services
-      await telegramBot.initialize();
-      await orderService.initialize();
+      // PHASE 3: Test Order Service
+      console.log('🔍 PHASE 3: Testing Order Service...');
+      try {
+        await orderService.initialize();
+        console.log('✅ OrderService initialized');
+        const afterOrderMem = process.memoryUsage();
+        console.log(`📊 After OrderService: ${Math.round(afterOrderMem.rss / 1024 / 1024)}MB RSS`);
 
-      // Check memory after services
-      const afterServicesMem = process.memoryUsage();
-      console.log(`📊 After Services: ${Math.round(afterServicesMem.rss / 1024 / 1024)}MB RSS`);
+        if (afterOrderMem.rss > 80 * 1024 * 1024) {
+          console.error('🚨 ORDER SERVICE IS THE MEMORY LEAK!');
+          process.exit(1);
+        }
+      } catch (error) {
+        console.error('❌ OrderService failed:', (error as Error).message);
+      }
+
+      // PHASE 4: Test Strategy (likely culprit!)
+      console.log('🔍 PHASE 4: Testing Strategy service...');
+      try {
+        await strategy.initialize();
+        console.log('✅ Strategy initialized');
+        const afterStrategyMem = process.memoryUsage();
+        console.log(`📊 After Strategy: ${Math.round(afterStrategyMem.rss / 1024 / 1024)}MB RSS`);
+
+        if (afterStrategyMem.rss > 80 * 1024 * 1024) {
+          console.error('🚨 STRATEGY IS THE MEMORY LEAK! FOUND THE CULPRIT!');
+          process.exit(1);
+        }
+      } catch (error) {
+        console.error('❌ Strategy failed:', (error as Error).message);
+      }
 
       // 5. Skip Health Monitor in production to save memory
       if (process.env.NODE_ENV !== 'production') {
         await healthMonitor.initialize();
       }
 
-      // 6. Send startup notification
-      await telegramBot.sendStartupMessage();
-      if (process.env.NODE_ENV !== 'production') {
-        await telegramBot.sendMessage('🔄 FRESH START: All data cleared, positions reset, statistics zeroed. Bot is completely fresh and ready for trading!');
-      }
+      // 6. Skip startup notification
+      console.log('⚠️ SKIPPING: Startup notification');
+
+      // Test minimal memory with just basic monitoring
+      const minimalMem = process.memoryUsage();
+      console.log(`📊 Minimal Bot Memory: ${Math.round(minimalMem.rss / 1024 / 1024)}MB RSS`);
 
       this.isRunning = true;
       this.startMemoryMonitoring();
+
+      // Run normally now - let's see what happens during operation
+      console.log('🔍 All services loaded successfully - running normally now...');
+      console.log('📊 Memory will be monitored every 10 seconds...');
 
       // Final memory check
       const finalMem = process.memoryUsage();
