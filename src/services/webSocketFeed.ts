@@ -22,6 +22,7 @@ class WebSocketFeed {
     NIFTY: { prices: [], volumes: [], currentPrice: 0, currentVolume: 0, lastUpdate: 0 },
     BANKNIFTY: { prices: [], volumes: [], currentPrice: 0, currentVolume: 0, lastUpdate: 0 }
   };
+  private readonly MAX_HISTORY = 5; // Minimal history for memory efficiency
   private pingInterval: NodeJS.Timeout | null = null;
   private pongTimeout: NodeJS.Timeout | null = null;
   private lastPongReceived: number = Date.now();
@@ -224,22 +225,14 @@ class WebSocketFeed {
     priceData.currentVolume = volume;
     priceData.lastUpdate = now;
 
-    // Add to price history with extreme minimal footprint for Render
+    // Add to price history with ultra-minimal footprint
     priceData.prices.push(price);
-    if (priceData.prices.length > 5) { // Absolute minimum for Render free tier
+    if (priceData.prices.length > this.MAX_HISTORY) {
       priceData.prices.shift();
     }
 
-    // Skip volume history in production to save memory
-    if (process.env.NODE_ENV !== 'production') {
-      if (!priceData.volumes) {
-        priceData.volumes = [];
-      }
-      priceData.volumes.push(volume);
-      if (priceData.volumes.length > 5) {
-        priceData.volumes.shift();
-      }
-    }
+    // Completely skip volume history to save memory
+    // Volume tracking disabled for memory optimization
 
     // Notify subscribers
     this.notifySubscribers(indexName, {
@@ -385,16 +378,29 @@ class WebSocketFeed {
     this.stopPingPong();
     this.stopHealthCheck();
 
-    // Clear reconnect timeout
+    // Clear all intervals and timeouts
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);
       this.reconnectTimeout = null;
     }
 
-    // Clear all subscribers to prevent memory leaks
+    if (this.restPollingInterval) {
+      clearInterval(this.restPollingInterval);
+      this.restPollingInterval = null;
+    }
+
+    // Aggressive memory cleanup
+    this.subscribers.length = 0;
     this.subscribers = [];
 
+    // Clear price data arrays
+    this.priceData.NIFTY.prices.length = 0;
+    this.priceData.BANKNIFTY.prices.length = 0;
+    if (this.priceData.NIFTY.volumes) this.priceData.NIFTY.volumes.length = 0;
+    if (this.priceData.BANKNIFTY.volumes) this.priceData.BANKNIFTY.volumes.length = 0;
+
     if (this.ws) {
+      this.ws.removeAllListeners();
       this.ws.close();
       this.ws = null;
     }

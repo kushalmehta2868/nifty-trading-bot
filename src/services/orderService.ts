@@ -357,6 +357,7 @@ class OrderService {
   private riskManager = new AdvancedRiskManager();
   private performanceTracker = new PerformanceTracker();
   private errorRecoveryManager = new ErrorRecoveryManager();
+  private readonly MAX_ACTIVE_ORDERS = 10; // Limit for memory
 
   public async initialize(): Promise<void> {
     // Store the handler reference for cleanup
@@ -507,6 +508,12 @@ class OrderService {
           brokerageAndTaxes: brokerageEstimate
         };
         
+        // Memory management - limit active orders
+        if (this.activeOrders.length >= this.MAX_ACTIVE_ORDERS) {
+          const oldestOrder = this.activeOrders.shift();
+          console.log(`🧹 Removed oldest order to maintain memory limit: ${oldestOrder?.orderId}`);
+        }
+
         this.activeOrders.push(newOrder);
         this.dailyTrades++;
         
@@ -559,7 +566,13 @@ class OrderService {
             riskScore: riskAssessment.riskScore,
             brokerageAndTaxes: brokerageEstimate
           };
-          
+
+          // Memory management - limit active orders
+          if (this.activeOrders.length >= this.MAX_ACTIVE_ORDERS) {
+            const oldestOrder = this.activeOrders.shift();
+            console.log(`🧹 Removed oldest order to maintain memory limit: ${oldestOrder?.orderId}`);
+          }
+
           this.activeOrders.push(newOrder);
           this.dailyTrades++;
           

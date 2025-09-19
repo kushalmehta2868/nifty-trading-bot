@@ -225,8 +225,8 @@ class TradingStrategy {
       timestamp: priceUpdate.timestamp
     });
 
-    // Keep only last 50 ticks for analysis
-    if (buffer.length > 50) {
+    // Keep only minimal ticks for analysis - extreme memory conservation
+    if (buffer.length > 10) {
       buffer.shift();
     }
 
@@ -1814,30 +1814,27 @@ class TradingStrategy {
   }
 
   public resetState(): void {
-    logger.info('🔄 STRATEGY RESET: Ultra-aggressively clearing all state...');
+    console.log('🔄 STRATEGY RESET: Clearing all state...');
 
-    // Clear all tracking variables
+    // Clear all tracking variables - nullify references
     this.lastSignalTime = {};
     this.activePositions = {};
 
-    // Ultra-aggressive memory cleanup for price buffers
+    // Extreme memory cleanup - clear arrays properly
     this.priceBuffers.NIFTY.length = 0;
     this.priceBuffers.BANKNIFTY.length = 0;
-    this.priceBuffers.NIFTY = [];
-    this.priceBuffers.BANKNIFTY = [];
+    this.priceBuffers = {
+      NIFTY: [],
+      BANKNIFTY: []
+    };
 
     // Clear event handlers map
     this.eventHandlers.clear();
 
-    // Force garbage collection if available
-    if (global.gc) {
-      global.gc();
-    }
-
     // ✅ Reset warmup state
     this.isWarmingUp = true;
     this.warmupStartTime = Date.now();
-    logger.info(`🔥 RESET WARMUP: ${this.WARMUP_DURATION/1000}s warmup period started after reset`);
+    console.log(`🔥 RESET WARMUP: ${this.WARMUP_DURATION/1000}s warmup period started`);
 
     // Schedule warmup end for reset
     setTimeout(() => {

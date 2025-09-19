@@ -9,17 +9,22 @@ const istTimestamp = winston.format((info) => {
   return info;
 });
 
-export const logger = winston.createLogger({
-  level: process.env.NODE_ENV === 'production' ? 'error' : 'info', // Only errors in production for extreme memory conservation
-  format: winston.format.combine(
-    istTimestamp(),
-    winston.format.printf(({ timestamp, level, message, ...meta }) => {
-      // Remove colorize for production to save memory
-      return `${timestamp} [${level}]: ${message} ${Object.keys(meta).length ? JSON.stringify(meta) : ''}`;
-    })
-  ),
-  transports: [
-    new winston.transports.Console()
-    // Removed file logging completely to save memory in production
-  ]
-});
+// Ultra-minimal logger for memory optimization
+export const logger = {
+  info: (message: string, meta?: any) => {
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`[INFO]: ${message}`, meta || '');
+    }
+  },
+  warn: (message: string, meta?: any) => {
+    console.warn(`[WARN]: ${message}`, meta || '');
+  },
+  error: (message: string, meta?: any) => {
+    console.error(`[ERROR]: ${message}`, meta || '');
+  },
+  debug: (message: string, meta?: any) => {
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`[DEBUG]: ${message}`, meta || '');
+    }
+  }
+};

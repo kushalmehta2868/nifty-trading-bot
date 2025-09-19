@@ -22,7 +22,8 @@ class AngelAPI {
   private searchScripCache = new Map<string, { data: any; timestamp: number }>();
   private cacheCleanupInterval: NodeJS.Timeout | null = null;
   private readonly SEARCH_SCRIP_DELAY = 1000; // 1 second between calls
-  private readonly CACHE_DURATION = 300000; // 5 minutes cache
+  private readonly CACHE_DURATION = 60000; // 1 minute cache - reduced for memory
+  private readonly MAX_CACHE_SIZE = 50; // Limit cache size
 
   get jwtToken(): string | null {
     return this._jwtToken;
@@ -351,8 +352,16 @@ class AngelAPI {
         searchscrip: searchtext // Correct parameter name as per Angel One API docs
       });
 
-      // Cache the response if successful
+      // Cache the response if successful with size limit
       if (response && response.data) {
+        // Memory management - limit cache size
+        if (this.searchScripCache.size >= this.MAX_CACHE_SIZE) {
+          const oldestKey = this.searchScripCache.keys().next().value;
+          if (oldestKey) {
+            this.searchScripCache.delete(oldestKey);
+          }
+        }
+
         this.searchScripCache.set(cacheKey, {
           data: response,
           timestamp: Date.now()
