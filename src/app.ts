@@ -3,13 +3,18 @@ import { strategy } from './services/strategy';
 import { telegramBot } from './services/telegramBot';
 import { orderService } from './services/orderService';
 import { logger } from './utils/logger';
+import express from 'express';
 
 class WebSocketTradingBot {
   private isRunning = false;
+  private server: any = null;
 
   public async start(): Promise<void> {
     try {
       console.log('🚀 Minimal Trading Bot Starting...');
+
+      // Start HTTP server for Render port binding requirement
+      await this.startHttpServer();
 
       // Only essential services - NO memory monitoring, NO cleanup
       await webSocketFeed.initialize();
@@ -33,10 +38,48 @@ class WebSocketTradingBot {
     }
   }
 
+  private async startHttpServer(): Promise<void> {
+    const app = express();
+    const port = process.env.PORT || 10000;
+
+    // Health check endpoint
+    app.get('/', (req, res) => {
+      res.json({
+        status: 'running',
+        uptime: process.uptime(),
+        memory: Math.round(process.memoryUsage().rss / 1024 / 1024) + 'MB',
+        isTrading: this.isRunning
+      });
+    });
+
+    // Status endpoint
+    app.get('/status', (req, res) => {
+      res.json({
+        bot: this.isRunning ? 'active' : 'inactive',
+        services: {
+          websocket: 'running',
+          strategy: 'running',
+          telegram: 'running',
+          orders: 'running'
+        }
+      });
+    });
+
+    this.server = app.listen(port, () => {
+      console.log(`🌐 HTTP Server running on port ${port} for Render`);
+    });
+  }
+
   public async stop(): Promise<void> {
     console.log('🛑 Stopping bot...');
     this.isRunning = false;
     webSocketFeed.disconnect();
+
+    if (this.server) {
+      this.server.close();
+      console.log('✅ HTTP Server stopped');
+    }
+
     console.log('✅ Bot stopped');
   }
 
