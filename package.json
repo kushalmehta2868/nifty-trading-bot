@@ -5,15 +5,9 @@
     "main": "src/app.js",
     "scripts": {
         "start": "node dist/app.js",
-        "start:ts": "ts-node src/app.ts",
         "dev": "nodemon --exec ts-node src/app.ts",
-        "build": "npm run kill-bot && npm run clean && tsc",
-        "kill-bot": "taskkill /F /IM node.exe 2>nul || echo No Node.js processes found",
-        "rebuild": "npm run build && npm start",
-        "build:watch": "tsc --watch",
-        "test": "ts-node scripts/test.ts",
-        "clean": "rm -rf dist",
-        "postinstall": "npm run build"
+        "build": "npm run clean && tsc",
+        "clean": "rm -rf dist"
     },
     "dependencies": {
         "axios": "^1.5.0",
@@ -21,7 +15,6 @@
         "express": "^4.18.2",
         "node-cron": "^3.0.2",
         "node-telegram-bot-api": "^0.61.0",
-        "smartapi-javascript": "^1.0.27",
         "speakeasy": "^2.0.0",
         "winston": "^3.10.0",
         "ws": "^8.14.0"

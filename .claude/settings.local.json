@@ -70,7 +70,9 @@
       "Read(/C:\\Users\\Asus\\Desktop\\trading-bot\\src\\services/**)",
       "Read(/C:\\Users\\Asus\\Desktop\\trading-bot\\src\\services/**)",
       "Read(/C:\\Users\\Asus\\Desktop\\trading-bot\\src\\services/**)",
-      "Read(/C:\\Users\\Asus\\Desktop\\trading-bot\\src\\services/**)"
+      "Read(/C:\\Users\\Asus\\Desktop\\trading-bot\\src\\services/**)",
+      "Bash(find:*)",
+      "Bash(npm install)"
     ],
     "deny": [],
     "ask": []

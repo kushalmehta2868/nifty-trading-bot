@@ -844,13 +844,6 @@ class OrderService {
   }
 
 
-  private calculateStrike(spotPrice: number, indexName: string): number {
-    const roundTo = indexName === 'BANKNIFTY' ? 500 : 50;
-    return Math.round(spotPrice / roundTo) * roundTo;
-  }
-
-  // ✅ REMOVED: Old calculateOptimalStrike method - now using extractStrikeFromSymbol
-  // Strike is calculated in strategy.ts with premium control and passed via signal.optionSymbol
 
   private startOrderMonitoring(): void {
     let cycleCount = 0;

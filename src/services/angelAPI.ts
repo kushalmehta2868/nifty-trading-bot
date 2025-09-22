@@ -317,13 +317,11 @@ class AngelAPI {
     try {
       logger.info(`🔍 Searching scrips: exchange=${exchange}, symbol=${searchtext}`);
 
-      // ✅ Fixed parameter name from 'searchtext' to 'searchscrip'
-      const response = await this.makeRequest('/rest/secure/angelbroking/order/v1/searchScrip', 'POST', {
+          const response = await this.makeRequest('/rest/secure/angelbroking/order/v1/searchScrip', 'POST', {
         exchange,
-        searchscrip: searchtext // Correct parameter name as per Angel One API docs
+        searchscrip: searchtext
       });
 
-      // ✅ Enhanced response logging
       if (response) {
         logger.info(`📋 Search response:`, {
           status: response.status,
@@ -350,7 +348,7 @@ class AngelAPI {
     }
   }
 
-  // ✅ Alternative search method using master data when API fails
+  // Alternative search method using master data when API fails
   public async searchScripsViaManual(
     exchange: string,
     searchtext: string
@@ -427,37 +425,32 @@ class AngelAPI {
     });
   }
 
-  // Get real-time option price using symbol token
   public async getOptionPrice(
     tradingSymbol: string,
     symbolToken: string
   ): Promise<number | null> {
     try {
       const response = await this.getQuote('NFO', tradingSymbol, symbolToken);
-      logger.debug("Quote response for price extraction:", response);
-      
-      // ✅ CRITICAL FIX: Multiple fallbacks for price extraction
+
       let price = 0;
       if (response) {
         price = parseFloat(
-          response.ltp || 
-          response.close || 
-          response.last_price || 
-          response.lasttradedprice || 
+          response.ltp ||
+          response.close ||
+          response.last_price ||
+          response.lasttradedprice ||
           0
         );
       }
 
       if (price > 0) {
-        logger.info(`✅ Option price extracted: ${tradingSymbol} = ₹${price.toFixed(2)}`);
+        logger.info(`✅ Option price: ${tradingSymbol} = ₹${price.toFixed(2)}`);
         return price;
       }
 
-      // Enhanced error logging
-      logger.error(`❌ Could not extract valid price for ${tradingSymbol}`);
-      logger.error(`Available fields in response:`, Object.keys(response || {}));
+      logger.error(`❌ Could not get price for ${tradingSymbol}`);
       return null;
-      
+
     } catch (error) {
       logger.error(`Failed to get option price for ${tradingSymbol}:`, (error as Error).message);
       return null;
@@ -569,7 +562,7 @@ class AngelAPI {
     }
   }
 
-  // ✅ Helper method to format expiry date correctly
+  // Format expiry date correctly
   private formatExpiryDate(expiry: string): string {
     // Convert various formats to DDMMMYY (e.g., "12SEP24")
     if (expiry.match(/^\d{2}[A-Z]{3}\d{2}$/)) {
@@ -589,7 +582,7 @@ class AngelAPI {
     return expiry;
   }
 
-  // ✅ New method to get token from master data file
+  // Get token from master data file
   private async getOptionTokenFromMaster(
     baseSymbol: string,
     expiry: string,
@@ -653,128 +646,9 @@ class AngelAPI {
     }
   }
 
-  public async debugAngelFormats(): Promise<void> {
-    try {
-      logger.info('🔍 Debug: Testing Angel One option formats...');
 
-      // ✅ Test current expiry options
-      const currentDate = new Date();
-      const currentExpiry = this.formatExpiryDate(currentDate.toISOString());
 
-      logger.info(`📅 Using current expiry format: ${currentExpiry}`);
-
-      // Test BANKNIFTY options search
-      const bankNiftySearch = await this.searchScrips('NFO', 'BANKNIFTY');
-      if (bankNiftySearch?.data && bankNiftySearch.data.length > 0) {
-        logger.info('📋 BANKNIFTY options found via search:');
-        bankNiftySearch.data.slice(0, 10).forEach((option: any, index: number) => {
-          logger.info(`   ${index + 1}. ${option.tradingsymbol} (Token: ${option.symboltoken})`);
-        });
-      }
-
-      // Test NIFTY options search
-      const niftySearch = await this.searchScrips('NFO', 'NIFTY');
-      if (niftySearch?.data && niftySearch.data.length > 0) {
-        logger.info('📋 NIFTY options found via search:');
-        niftySearch.data.slice(0, 10).forEach((option: any, index: number) => {
-          logger.info(`   ${index + 1}. ${option.tradingsymbol} (Token: ${option.symboltoken})`);
-        });
-      }
-
-      // ✅ Test master data file access
-      await this.debugMasterDataOptions();
-
-    } catch (error) {
-      logger.error('Debug failed:', (error as Error).message);
-    }
-  }
-
-  // ✅ New comprehensive debug method for master data
-  public async debugMasterDataOptions(): Promise<void> {
-    try {
-      logger.info('📋 Fetching Angel One master data for option debugging...');
-
-      const response = await axios.get('https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json');
-      const masterData = response.data;
-
-      // ✅ Find current NIFTY options
-      const niftyOptions = masterData.filter((item: any) => {
-        return item.exch_seg === 'NFO' &&
-          item.name &&
-          item.name.includes('NIFTY') &&
-          item.instrumenttype === 'OPTIDX' &&
-          !item.name.includes('BANK'); // Exclude BANKNIFTY
-      });
-
-      // ✅ Find current BANKNIFTY options
-      const bankniftyOptions = masterData.filter((item: any) => {
-        return item.exch_seg === 'NFO' &&
-          item.name &&
-          (item.name.includes('BANKNIFTY') || item.name.includes('NIFTY BANK')) &&
-          item.instrumenttype === 'OPTIDX';
-      });
-
-      logger.info(`📊 Master Data Summary:`);
-      logger.info(`   NIFTY Options: ${niftyOptions.length} contracts`);
-      logger.info(`   BANKNIFTY Options: ${bankniftyOptions.length} contracts`);
-
-      // Show sample NIFTY options
-      if (niftyOptions.length > 0) {
-        logger.info('📋 Sample NIFTY option formats:');
-        niftyOptions.slice(0, 5).forEach((option: any, index: number) => {
-          logger.info(`   ${index + 1}. Name: ${option.name} | Symbol: ${option.symbol} | Token: ${option.token}`);
-        });
-      }
-
-      // Show sample BANKNIFTY options
-      if (bankniftyOptions.length > 0) {
-        logger.info('📋 Sample BANKNIFTY option formats:');
-        bankniftyOptions.slice(0, 5).forEach((option: any, index: number) => {
-          logger.info(`   ${index + 1}. Name: ${option.name} | Symbol: ${option.symbol} | Token: ${option.token}`);
-        });
-      }
-
-      // ✅ Find unique expiry formats
-      const niftyExpiries = [...new Set(niftyOptions.slice(0, 50).map((item: any) => {
-        const match = item.name.match(/(\d{2}[A-Z]{3}\d{2})/);
-        return match ? match[1] : null;
-      }).filter(Boolean))];
-
-      const bankniftyExpiries = [...new Set(bankniftyOptions.slice(0, 50).map((item: any) => {
-        const match = item.name.match(/(\d{2}[A-Z]{3}\d{2})/);
-        return match ? match[1] : null;
-      }).filter(Boolean))];
-
-      logger.info(`📅 Available expiry formats:`);
-      logger.info(`   NIFTY: ${niftyExpiries.slice(0, 5).join(', ')}`);
-      logger.info(`   BANKNIFTY: ${bankniftyExpiries.slice(0, 5).join(', ')}`);
-
-      // ✅ Test a specific option token fetch
-      if (bankniftyExpiries.length > 0 && bankniftyOptions.length > 0) {
-        const testExpiry = bankniftyExpiries[0];
-        logger.info(`🧪 Testing token fetch for BANKNIFTY ${testExpiry} options...`);
-
-        // Extract strike from a real option
-        const testOption = bankniftyOptions.find((opt: any) => opt.name.includes(testExpiry));
-        if (testOption) {
-          const strikeMatch = testOption.name.match(/(\d+)(CE|PE)/);
-          if (strikeMatch) {
-            const testStrike = parseInt(strikeMatch[1]);
-            const testType = strikeMatch[2] as 'CE' | 'PE';
-
-            logger.info(`🧪 Testing: BANKNIFTY ${testStrike} ${testType} ${testExpiry}`);
-            const token = await this.getOptionToken('BANKNIFTY', testStrike, testType, testExpiry as string);
-            logger.info(`🧪 Result: ${token ? `✅ Token: ${token}` : '❌ Failed'}`);
-          }
-        }
-      }
-
-    } catch (error) {
-      logger.error('Master data debug failed:', (error as Error).message);
-    }
-  }
-
-  // ✅ Helper method to get current and next expiry dates
+  // Get current expiry dates
   public async getCurrentExpiries(indexName: 'NIFTY' | 'BANKNIFTY'): Promise<string[]> {
     try {
       logger.info(`📅 Fetching current expiries for ${indexName}...`);
@@ -808,39 +682,6 @@ class AngelAPI {
     }
   }
 
-  // ✅ Get ATM strike price for an index
-  public async getATMStrike(indexName: 'NIFTY' | 'BANKNIFTY', currentPrice: number): Promise<number> {
-    const roundTo = indexName === 'NIFTY' ? 50 : 500; // NIFTY rounds to 50, BANKNIFTY to 500
-    return Math.round(currentPrice / roundTo) * roundTo;
-  }
-
-  // ✅ Comprehensive option token fetching with smart fallbacks
-  public async getOptionTokenSmart(
-    indexName: 'NIFTY' | 'BANKNIFTY',
-    strike: number,
-    optionType: 'CE' | 'PE',
-    expiry?: string
-  ): Promise<string | null> {
-    try {
-      // If no expiry provided, get the nearest expiry
-      if (!expiry) {
-        const expiries = await this.getCurrentExpiries(indexName);
-        if (expiries.length === 0) {
-          logger.error(`No expiries found for ${indexName}`);
-          return null;
-        }
-        expiry = expiries[0]; // Use nearest expiry
-        logger.info(`📅 Using nearest expiry: ${expiry} for ${indexName}`);
-      }
-
-      // Use the improved getOptionToken method
-      return await this.getOptionToken(indexName, strike, optionType, expiry);
-
-    } catch (error) {
-      logger.error(`Smart option token fetch failed for ${indexName}:`, (error as Error).message);
-      return null;
-    }
-  }
 
 
   // Get order status and details
@@ -916,28 +757,6 @@ class AngelAPI {
     }
   }
 
-  // Get market depth with volume data
-  public async getMarketDepth(
-    exchange: string,
-    tradingSymbol: string,
-    symbolToken: string
-  ): Promise<any> {
-    try {
-      const response = await this.makeRequest(
-        '/rest/secure/angelbroking/order/v1/getMarketData',
-        'POST',
-        {
-          exchange,
-          tradingsymbol: tradingSymbol,
-          symboltoken: symbolToken
-        }
-      );
-      return response;
-    } catch (error) {
-      logger.error(`Failed to get market depth for ${tradingSymbol}:`, (error as Error).message);
-      return null;
-    }
-  }
 
   // Get candlestick data with volume
   public async getCandleData(
@@ -966,30 +785,6 @@ class AngelAPI {
     }
   }
 
-  // Get option Greeks and IV data
-  public async getOptionGreeks(
-    exchange: string = 'NFO',
-    symbolname: string,
-    strikeprice: string,
-    optiontype: 'CE' | 'PE'
-  ): Promise<any> {
-    try {
-      const response = await this.makeRequest(
-        '/rest/secure/angelbroking/order/v1/optionGreeks',
-        'POST',
-        {
-          exchange,
-          symbolname,
-          strikeprice,
-          optiontype
-        }
-      );
-      return response;
-    } catch (error) {
-      logger.error('Failed to get option Greeks:', (error as Error).message);
-      return null;
-    }
-  }
 
   // Get real-time quote with volume
   public async getQuote(
@@ -1126,166 +921,15 @@ class AngelAPI {
   }
 
 
-  public async debugTokens(): Promise<void> {
-    logger.info('🔍 Debug Token Information:');
-    logger.info(`JWT Token: ${this._jwtToken ? this._jwtToken.substring(0, 20) + '...' : 'NULL'}`);
-    logger.info(`Feed Token: ${this._feedToken ? this._feedToken.substring(0, 20) + '...' : 'NULL'}`);
-    logger.info(`Authentication Status: ${this.isAuthenticated}`);
-
-    // Test with a simple profile call
-    try {
-      const profile = await this.getProfile();
-      logger.info('✅ API authentication working - profile retrieved');
-    } catch (error) {
-      logger.error('❌ API authentication failed:', (error as Error).message);
-    }
-  }
 
 
 
 
-  // Fetch NSE master data for tokens
-  public async getMasterData(): Promise<void> {
-    try {
-      logger.info('🔍 Fetching Angel One master data for NSE tokens...');
-
-      const response = await axios.get('https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json');
-      const masterData = response.data;
-
-      // Find NIFTY contracts
-      const niftyContracts = masterData.filter((item: any) =>
-        item.name && item.name.includes('NIFTY') && item.exch_seg === 'NSE' && item.symbol === 'NIFTY 50'
-      );
-
-      const bankniftyContracts = masterData.filter((item: any) =>
-        item.name && item.name.includes('NIFTY') && item.exch_seg === 'NSE' && item.symbol === 'NIFTY BANK'
-      );
-
-      logger.info('🔍 NSE Contracts found:');
-
-      if (niftyContracts.length > 0) {
-        logger.info(`📈 NIFTY: Token=${niftyContracts[0].token}, Symbol=${niftyContracts[0].symbol}`);
-      }
-
-      if (bankniftyContracts.length > 0) {
-        logger.info(`📈 BANKNIFTY: Token=${bankniftyContracts[0].token}, Symbol=${bankniftyContracts[0].symbol}`);
-      }
-
-    } catch (error) {
-      logger.error('Failed to fetch master data:', (error as Error).message);
-    }
-  }
-
-  public async testTokenLTP(): Promise<void> {
-    const tokens = [
-      { name: 'NIFTY', token: config.indices.NIFTY.token, exchange: 'NSE' },
-      { name: 'BANKNIFTY', token: config.indices.BANKNIFTY.token, exchange: 'NSE' }
-    ];
-
-    for (const item of tokens) {
-      try {
-        // ✅ CORRECT API endpoint and format
-        const response = await this.makeRequest(
-          '/rest/secure/angelbroking/market/v1/quote/',
-          'POST',
-          {
-            mode: 'LTP',
-            exchangeTokens: {
-              [item.exchange]: [item.token]
-            }
-          }
-        );
-
-        if (response?.data?.fetched && response.data.fetched.length > 0) {
-          const ltp = response.data.fetched[0].ltp;
-          logger.info(`✅ ${item.name}: ₹${ltp} (Token: ${item.token})`);
-        } else if (response?.data?.unfetched && response.data.unfetched.length > 0) {
-          logger.warn(`❌ ${item.name}: ${response.data.unfetched[0].message} (Token: ${item.token})`);
-        } else {
-          logger.warn(`❌ ${item.name}: No data returned (Token: ${item.token})`);
-          logger.warn(`   Response:`, JSON.stringify(response, null, 2));
-        }
-      } catch (error) {
-        logger.error(`❌ ${item.name} LTP failed:`, (error as Error).message);
-      }
-    }
-  }
 
 
 
-  public async getMasterTokens(): Promise<void> {
-    try {
-      logger.info('📋 Fetching Angel One NSE master contract file...');
 
-      const response = await axios.get('https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json');
-      const masterData = response.data;
 
-      // Find NIFTY tokens
-      const niftyContracts = masterData.filter((item: any) =>
-        item.name && item.name.includes('NIFTY') && item.exch_seg === 'NSE' && item.symbol === 'NIFTY 50'
-      );
-
-      const bankniftyContracts = masterData.filter((item: any) =>
-        item.name && item.name.includes('NIFTY') && item.exch_seg === 'NSE' && item.symbol === 'NIFTY BANK'
-      );
-
-      logger.info('🔍 NSE Contracts found:');
-
-      if (niftyContracts.length > 0) {
-        logger.info(`📈 NIFTY: Token=${niftyContracts[0].token}, Symbol=${niftyContracts[0].symbol}`);
-      }
-
-      if (bankniftyContracts.length > 0) {
-        logger.info(`📈 BANKNIFTY: Token=${bankniftyContracts[0].token}, Symbol=${bankniftyContracts[0].symbol}`);
-      }
-
-    } catch (error) {
-      logger.error('Failed to fetch master tokens:', (error as Error).message);
-    }
-  }
-
-  // Debug method to find BANKNIFTY option symbol format
-  public async debugBankNiftyOptions(expiry: string = '30SEP25'): Promise<void> {
-    try {
-      logger.info('🔍 Debugging BANKNIFTY option symbol formats...');
-
-      const response = await axios.get('https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json');
-      const masterData = response.data;
-
-      // Find BANKNIFTY options for the specific expiry
-      const bankniftyOptions = masterData.filter((item: any) => {
-        return item.exch_seg === 'NFO' &&
-          item.name &&
-          (item.name.includes('BANKNIFTY') || item.name.includes('BANKN')) &&
-          item.name.includes(expiry);
-      });
-
-      logger.info(`📋 Found ${bankniftyOptions.length} BANKNIFTY options for expiry ${expiry}:`);
-
-      bankniftyOptions.slice(0, 20).forEach((option: any, index: number) => {
-        logger.info(`   ${index + 1}. Name: ${option.name} | Symbol: ${option.symbol} | Token: ${option.token}`);
-      });
-
-      // Also try searching without specific expiry
-      const allBankNiftyOptions = masterData.filter((item: any) => {
-        return item.exch_seg === 'NFO' &&
-          item.name &&
-          (item.name.includes('BANKNIFTY') || item.name.includes('BANKN'));
-      });
-
-      logger.info(`📋 Total BANKNIFTY options in master file: ${allBankNiftyOptions.length}`);
-
-      // Show some examples
-      const uniqueFormats = [...new Set(allBankNiftyOptions.slice(0, 10).map((item: any) => item.name))];
-      logger.info('📋 Sample BANKNIFTY option name formats:');
-      uniqueFormats.forEach((format, index) => {
-        logger.info(`   ${index + 1}. ${format}`);
-      });
-
-    } catch (error) {
-      logger.error('Failed to debug BANKNIFTY options:', (error as Error).message);
-    }
-  }
 
 
 

@@ -722,7 +722,7 @@ class TradingStrategy {
       const realPrice = await this.getRealOptionPrice(signal);
 
       if (realPrice) {
-        // ✅ FINAL VALIDATION: Check if actual premium exceeds ₹15,000 limit
+        // Check if actual premium exceeds ₹15,000 limit
         const lotSize = config.indices[signal.indexName].lotSize;
         const actualPositionValue = realPrice * lotSize;
         const maxPositionValue = 15000;
@@ -838,9 +838,8 @@ class TradingStrategy {
         lastDayOfMonth = new Date(nextYear, adjustedMonth + 1, 0);
       }
 
-      // ✅ CRITICAL FIX: Find the last WORKING day, not just last day
-      const { isNSETradingDay } = require('../utils/holidays');
-      while (!isNSETradingDay(lastDayOfMonth)) {
+      // Find last working day
+      while (lastDayOfMonth.getDay() === 0 || lastDayOfMonth.getDay() === 6) {
         lastDayOfMonth.setDate(lastDayOfMonth.getDate() - 1);
       }
 
@@ -851,8 +850,7 @@ class TradingStrategy {
 
       return `${day}${month}${year}`;
     } else {
-      // NIFTY: Weekly expiry on Tuesday 
-      // ✅ CRITICAL FIX: Use CURRENT week expiry, not next week
+      // NIFTY: Weekly expiry on Tuesday
       const currentTuesday = new Date(today);
       const todayDay = today.getDay(); // 0=Sunday, 1=Monday, 2=Tuesday, etc.
       
@@ -874,24 +872,11 @@ class TradingStrategy {
       const month = months[currentTuesday.getMonth()];
       const year = currentTuesday.getFullYear().toString().slice(-2);
 
-      logger.debug(`🗓️ NIFTY expiry calculation: Today=${today.toDateString()}, Expiry=${currentTuesday.toDateString()}, Format=${day}${month}${year}`);
       
       return `${day}${month}${year}`;
     }
   }
 
-  private calculateEMA(prices: number[], period: number): number {
-    if (prices.length < period) return prices[prices.length - 1];
-
-    const multiplier = 2 / (period + 1);
-    let ema = prices[0];
-
-    for (let i = 1; i < prices.length; i++) {
-      ema = (prices[i] * multiplier) + (ema * (1 - multiplier));
-    }
-
-    return ema;
-  }
 
   private calculateRSI(prices: number[], period: number): number {
     if (prices.length < period + 1) return 50;
@@ -915,18 +900,8 @@ class TradingStrategy {
     return 100 - (100 / (1 + rs));
   }
 
-  private calculateStrike(spotPrice: number, indexName: IndexName): number {
-    switch (indexName) {
-      case 'BANKNIFTY':
-        return Math.round(spotPrice / 500) * 500;
-      case 'NIFTY':
-        return Math.round(spotPrice / 50) * 50;
-      default:
-        return Math.round(spotPrice / 50) * 50;
-    }
-  }
 
-  // ✅ NEW: Premium-based strike selection with 15k position limit
+  // Premium-based strike selection with 15k position limit
   private async calculateOptimalStrike(
     spotPrice: number,
     indexName: IndexName,

@@ -82,10 +82,6 @@ export interface TechnicalIndicators {
   rsi: number;
   priceChange: number;
   vwap?: number;
-  currentVolume?: number;
-  avgVolume?: number;
-  volumeRatio?: number;
-  ivRank?: number;
 }
 
 export interface TradingSignal {
