@@ -2,6 +2,7 @@ import { angelAPI } from './angelAPI';
 import { config } from '../config/config';
 import { logger } from '../utils/logger';
 import { TradingSignal, OrderDetails, OrderResponse, OptionType } from '../types';
+import { riskManager } from './riskManager';
 
 // Advanced Risk Management System
 class AdvancedRiskManager {
@@ -1030,6 +1031,9 @@ class OrderService {
         // Calculate P&L
         const pnl = (exitPrice - entryPrice) * config.indices[activeOrder.signal.indexName].lotSize;
 
+        // 📊 RECORD P&L WITH RISK MANAGER
+        riskManager.recordTrade(pnl, activeOrder.signal);
+
         // Determine exit reason with more sophisticated logic
         const targetDistance = Math.abs(exitPrice - activeOrder.signal.target);
         const slDistance = Math.abs(exitPrice - activeOrder.signal.stopLoss);
@@ -1039,7 +1043,7 @@ class OrderService {
         const exitTime = new Date();
         const tradingDuration = exitTime.getTime() - activeOrder.timestamp.getTime();
         const netPnL = pnl - (activeOrder.brokerageAndTaxes || 0);
-        
+
         // Update order status with comprehensive metrics
         activeOrder.status = exitReason === 'TARGET' ? 'EXITED_TARGET' : 'EXITED_SL';
         activeOrder.exitPrice = exitPrice;
@@ -1728,6 +1732,9 @@ ${Object.keys(healthStatus).length === 0 ? '✅ All systems operational' :
 
         // Calculate P&L
         const pnl = (exitPrice - entryPrice) * config.indices[activeOrder.signal.indexName].lotSize;
+
+        // 📊 RECORD P&L WITH RISK MANAGER
+        riskManager.recordTrade(pnl, activeOrder.signal);
 
         // ✅ ENHANCED ATOMIC UPDATE with comprehensive tracking
         const exitTime = new Date();

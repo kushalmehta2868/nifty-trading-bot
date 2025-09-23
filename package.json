@@ -7,7 +7,9 @@
         "start": "node dist/app.js",
         "dev": "nodemon --exec ts-node src/app.ts",
         "build": "npm run clean && tsc",
-        "clean": "rm -rf dist"
+        "clean": "rm -rf dist",
+        "backtest": "ts-node src/scripts/runBacktest.ts",
+        "paper": "ts-node src/scripts/runPaperTrading.ts"
     },
     "dependencies": {
         "axios": "^1.5.0",

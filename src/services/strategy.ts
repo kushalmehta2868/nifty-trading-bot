@@ -9,6 +9,8 @@ import { logger } from '../utils/logger';
 import { isMarketOpen } from '../utils/marketHours';
 import { angelAPI } from './angelAPI';
 import { webSocketFeed } from './webSocketFeed';
+import { marketVolatility, VolatilityData } from './marketVolatility';
+import { riskManager, SlippageAdjustedPrices } from './riskManager';
 
 interface PriceBufferItem {
   price: number;
@@ -282,6 +284,16 @@ class TradingStrategy {
         const currentTime = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' });
         const hours = '9:30 AM - 2:45 PM';
         logger.info(`⏰ ${indexName} - Outside signal hours (${currentTime}), new trades disabled after 2:45 PM - active during ${hours}`);
+      }
+      return null;
+    }
+
+    // Check market volatility conditions
+    const volatilityData = await marketVolatility.getCurrentVolatility();
+    if (!volatilityData.shouldTrade) {
+      const shouldLog = Date.now() % 30000 < 1000;
+      if (shouldLog) {
+        logger.warn(`🌪️ ${indexName} - Trading suspended due to extreme volatility (VIX: ${volatilityData.vix.toFixed(2)})`);
       }
       return null;
     }
@@ -718,27 +730,25 @@ class TradingStrategy {
 
   private async executeSignal(signal: TradingSignal): Promise<void> {
     try {
+      // 🔒 ENHANCED RISK MANAGEMENT - Check all risk limits first
+      const riskStatus = riskManager.checkRiskLimits(signal);
+      if (!riskStatus.canTrade) {
+        logger.warn(`❌ RISK LIMIT VIOLATION: ${riskStatus.reason}`);
+        logger.warn(`   Current Risk Score: ${riskStatus.riskScore}/100`);
+        logger.warn(`   Daily P&L: ₹${riskStatus.dailyPnL} | Active Positions: ${riskStatus.activePositions}`);
+        throw new Error(`Risk management: ${riskStatus.reason}`);
+      }
+
+      // Get current volatility data
+      const volatilityData = await marketVolatility.getCurrentVolatility();
+
       // Fetch real option price from Angel One API
       const realPrice = await this.getRealOptionPrice(signal);
 
       if (realPrice) {
-        // Check if actual premium exceeds ₹15,000 limit
-        const lotSize = config.indices[signal.indexName].lotSize;
-        const actualPositionValue = realPrice * lotSize;
-        const maxPositionValue = 15000;
-
-        if (actualPositionValue > maxPositionValue) {
-          logger.error(`❌ POSITION SIZE LIMIT EXCEEDED:`);
-          logger.error(`   Option: ${signal.optionSymbol}`);
-          logger.error(`   Real Premium: ₹${realPrice.toFixed(2)}`);
-          logger.error(`   Position Value: ₹${actualPositionValue.toFixed(0)} (Limit: ₹${maxPositionValue})`);
-          logger.error(`   📋 Signal REJECTED due to premium being too expensive`);
-          throw new Error(`Position value ₹${actualPositionValue.toFixed(0)} exceeds ₹15,000 limit`);
-        }
-
         signal.entryPrice = realPrice;
 
-        // 🚀 ADAPTIVE VOLATILITY-BASED TARGETS 
+        // 🚀 ADAPTIVE VOLATILITY-BASED TARGETS
         const prices = this.priceBuffers[signal.indexName].map(item => item.price);
         const volatility = this.calculateAdaptiveVolatility(prices);
 
@@ -746,15 +756,49 @@ class TradingStrategy {
         signal.target = parseFloat((realPrice * volatility.adaptive_target).toFixed(2));
         signal.stopLoss = parseFloat((realPrice * volatility.adaptive_sl).toFixed(2));
 
-        // Calculate expected profit potential
-        const profitPotential = ((signal.target - realPrice) / realPrice) * 100;
-        const riskAmount = ((realPrice - signal.stopLoss) / realPrice) * 100;
+        // 💰 APPLY SLIPPAGE ADJUSTMENTS
+        const slippagePercent = marketVolatility.getSlippageAdjustment(volatilityData.regime);
+        const adjustedPrices = riskManager.adjustPricesForSlippage(signal, slippagePercent);
+
+        // Update signal with slippage-adjusted prices
+        signal.entryPrice = adjustedPrices.entryPrice;
+        signal.target = adjustedPrices.target;
+        signal.stopLoss = adjustedPrices.stopLoss;
+
+        // 📊 CALCULATE OPTIMAL POSITION SIZE
+        const availableCapital = 100000; // You should get this from your actual capital
+        const optimalPositionSize = riskManager.calculateOptimalPositionSize(
+          signal,
+          volatilityData.positionSizeMultiplier,
+          availableCapital
+        );
+
+        // Check if position size is viable
+        const lotSize = config.indices[signal.indexName].lotSize;
+        const actualPositionValue = signal.entryPrice * lotSize;
+
+        if (actualPositionValue > optimalPositionSize) {
+          logger.error(`❌ POSITION SIZE LIMIT EXCEEDED:`);
+          logger.error(`   Option: ${signal.optionSymbol}`);
+          logger.error(`   Real Premium: ₹${realPrice.toFixed(2)} → ₹${signal.entryPrice.toFixed(2)} (after slippage)`);
+          logger.error(`   Position Value: ₹${actualPositionValue.toFixed(0)} (Optimal: ₹${optimalPositionSize.toFixed(0)})`);
+          logger.error(`   📋 Signal REJECTED due to premium being too expensive`);
+          throw new Error(`Position value ₹${actualPositionValue.toFixed(0)} exceeds optimal size ₹${optimalPositionSize.toFixed(0)}`);
+        }
+
+        // Calculate expected profit potential (after slippage)
+        const profitPotential = ((signal.target - signal.entryPrice) / signal.entryPrice) * 100;
+        const riskAmount = ((signal.entryPrice - signal.stopLoss) / signal.entryPrice) * 100;
         const riskReward = profitPotential / riskAmount;
 
-        logger.info(`✅ Real Option Price: ${signal.optionSymbol} = ₹${signal.entryPrice}`);
-        logger.info(`💰 Position Value: ₹${actualPositionValue.toFixed(0)} (within ₹${maxPositionValue} limit)`);
-        logger.info(`🎯 Adaptive Targets: Target=₹${signal.target} (+${profitPotential.toFixed(1)}%) | SL=₹${signal.stopLoss} (-${riskAmount.toFixed(1)}%)`);
-        logger.info(`📊 Risk:Reward = 1:${riskReward.toFixed(2)} | Volatility Expanding: ${volatility.isExpanding}`);
+        logger.info(`✅ Real Option Price: ${signal.optionSymbol} = ₹${realPrice.toFixed(2)} → ₹${signal.entryPrice.toFixed(2)} (slippage: ${(slippagePercent * 100).toFixed(2)}%)`);
+        logger.info(`💰 Position Value: ₹${actualPositionValue.toFixed(0)} (Optimal: ₹${optimalPositionSize.toFixed(0)}) | VIX Regime: ${volatilityData.regime}`);
+        logger.info(`🎯 Adjusted Targets: Target=₹${signal.target.toFixed(2)} (+${profitPotential.toFixed(1)}%) | SL=₹${signal.stopLoss.toFixed(2)} (-${riskAmount.toFixed(1)}%)`);
+        logger.info(`📊 Risk:Reward = 1:${riskReward.toFixed(2)} | Vol Multiplier: ${volatilityData.positionSizeMultiplier}x | Risk Score: ${riskStatus.riskScore}/100`);
+
+        // Record the trade opening (with 0 P&L initially)
+        riskManager.recordTrade(0, signal);
+
       } else {
         logger.error(`CRITICAL: Could not fetch real option price for ${signal.optionSymbol}`);
         throw new Error('Real option price required - cannot proceed with estimated prices');
@@ -1679,20 +1723,20 @@ class TradingStrategy {
 
   public resetState(): void {
     logger.info('🔄 STRATEGY RESET: Clearing all state...');
-    
+
     // Clear all tracking variables
     this.lastSignalTime = {};
     this.activePositions = {};
-    
+
     // Clear price buffers
     this.priceBuffers = {
       NIFTY: [],
       BANKNIFTY: []
     };
-    
+
     // Clear event handlers map
     this.eventHandlers.clear();
-    
+
     // Clear any intervals if running
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval);
@@ -1703,7 +1747,10 @@ class TradingStrategy {
       clearInterval(this.positionLoggingInterval);
       this.positionLoggingInterval = null;
     }
-    
+
+    // Reset risk manager state
+    riskManager.resetState();
+
     logger.info('✅ Strategy state reset complete');
   }
 }
