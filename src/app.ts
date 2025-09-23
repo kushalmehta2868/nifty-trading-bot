@@ -21,6 +21,9 @@ class WebSocketTradingBot {
   private dailySummaryTimeout: NodeJS.Timeout | null = null;
   private marketOpenTimeout: NodeJS.Timeout | null = null;
   private heartbeatInterval: NodeJS.Timeout | null = null;
+  private lastHealthCheck = Date.now();
+  private consecutiveErrors = 0;
+  private readonly MAX_CONSECUTIVE_ERRORS = 5;
 
   public async start(): Promise<void> {
     try {
@@ -80,8 +83,23 @@ class WebSocketTradingBot {
       logger.info('✅ All services initialized successfully with comprehensive monitoring');
 
     } catch (error) {
-      logger.error('Failed to start trading bot:', (error as Error).message);
-      process.exit(1);
+      logger.error('❌ Failed to start trading bot:', (error as Error).message);
+
+      try {
+        await telegramBot.sendMessage(`🚨 BOT STARTUP FAILED\n\nError: ${(error as Error).message}\n\nBot will retry in 30 seconds...`);
+      } catch (telegramError) {
+        logger.error('Failed to send startup error notification:', telegramError);
+      }
+
+      // Retry startup after 30 seconds instead of exiting
+      logger.info('🔄 Retrying bot startup in 30 seconds...');
+      setTimeout(() => {
+        this.start().catch(retryError => {
+          logger.error('❌ Bot startup retry failed:', retryError);
+          // Final attempt - if this fails, then exit
+          process.exit(1);
+        });
+      }, 30000);
     }
   }
 
@@ -203,32 +221,47 @@ class WebSocketTradingBot {
   private startHeartbeat(): void {
     this.stopHeartbeat();
     this.heartbeatInterval = setInterval(async () => {
-      if (this.isRunning && isMarketOpen()) {
-        const uptime = Math.floor((Date.now() - this.startTime) / 1000);
-        const uptimeMinutes = Math.floor(uptime / 60);
-        const uptimeHours = Math.floor(uptimeMinutes / 60);
-        const displayMinutes = uptimeMinutes % 60;
+      try {
+        if (this.isRunning && isMarketOpen()) {
+          const uptime = Math.floor((Date.now() - this.startTime) / 1000);
+          const uptimeMinutes = Math.floor(uptime / 60);
+          const uptimeHours = Math.floor(uptimeMinutes / 60);
+          const displayMinutes = uptimeMinutes % 60;
 
-        // Get market status
-        const marketStatus = getMarketStatus();
-        let marketInfo = '';
-        if (marketStatus.nse) {
-          marketInfo = 'NSE: OPEN';
-        } else {
-          marketInfo = 'NSE: CLOSED';
+          // Get market status with error handling
+          let marketInfo = 'NSE: UNKNOWN';
+          try {
+            const marketStatus = getMarketStatus();
+            marketInfo = marketStatus.nse ? 'NSE: OPEN' : 'NSE: CLOSED';
+          } catch (marketError) {
+            logger.debug('Market status check failed:', (marketError as Error).message);
+          }
+
+          logger.info(`💚 BOT WORKING - Runtime: ${uptimeHours}h ${displayMinutes}m | ${marketInfo} | Signals: ${this.stats.signals} | Status: MONITORING ALL CONDITIONS`);
+
+          // Show current market conditions with error handling
+          try {
+            const marketConditions = await strategy.getCurrentMarketConditions();
+            logger.info(marketConditions);
+
+            // Reset error counter on successful operations
+            this.consecutiveErrors = 0;
+          } catch (error) {
+            logger.debug('📊 Current Market Conditions: Error retrieving data -', (error as Error).message);
+            this.consecutiveErrors++;
+          }
+        } else if (this.isRunning && !isMarketOpen()) {
+          logger.info(`💛 BOT WORKING - Market: CLOSED | Status: WAITING FOR MARKET OPEN`);
         }
+      } catch (heartbeatError) {
+        logger.error('⚠️ Heartbeat error (continuing operation):', (heartbeatError as Error).message);
+        this.consecutiveErrors++;
 
-        logger.info(`💚 BOT WORKING - Runtime: ${uptimeHours}h ${displayMinutes}m | ${marketInfo} | Signals: ${this.stats.signals} | Status: MONITORING ALL CONDITIONS`);
-
-        // Show current market conditions
-        try {
-          const marketConditions = await strategy.getCurrentMarketConditions();
-          logger.info(marketConditions);
-        } catch (error) {
-          logger.info('📊 Current Market Conditions: Error retrieving data');
+        // If too many consecutive errors, attempt recovery
+        if (this.consecutiveErrors >= this.MAX_CONSECUTIVE_ERRORS) {
+          logger.error(`🚨 Too many consecutive errors (${this.consecutiveErrors}), attempting service recovery...`);
+          await this.attemptServiceRecovery();
         }
-      } else if (this.isRunning && !isMarketOpen()) {
-        logger.info(`💛 BOT WORKING - Market: CLOSED | Status: WAITING FOR MARKET OPEN`);
       }
     }, 10000); // Every 10 seconds
   }
@@ -238,6 +271,61 @@ class WebSocketTradingBot {
       clearInterval(this.heartbeatInterval);
       this.heartbeatInterval = null;
       logger.debug('⏰ Heartbeat logger stopped');
+    }
+  }
+
+  private async attemptServiceRecovery(): Promise<void> {
+    try {
+      logger.info('🔧 Attempting automatic service recovery...');
+
+      // Notify about recovery attempt
+      try {
+        await telegramBot.sendMessage(`🔧 AUTOMATIC RECOVERY\n\nDetected ${this.consecutiveErrors} consecutive errors.\nAttempting to restart services...\n\nBot will continue operating.`);
+      } catch (telegramError) {
+        logger.error('Failed to send recovery notification:', telegramError);
+      }
+
+      // Reset error counter
+      this.consecutiveErrors = 0;
+
+      // Restart critical services
+      if (this.isRunning && isMarketOpen()) {
+        logger.info('🔄 Reinitializing WebSocket connection...');
+        try {
+          webSocketFeed.disconnect();
+          await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
+          await webSocketFeed.initialize();
+          logger.info('✅ WebSocket reinitialized successfully');
+        } catch (wsError) {
+          logger.error('❌ WebSocket reinitialization failed:', (wsError as Error).message);
+        }
+
+        logger.info('🔄 Resetting strategy state...');
+        try {
+          strategy.resetState();
+          await strategy.initialize();
+          logger.info('✅ Strategy reinitialized successfully');
+        } catch (strategyError) {
+          logger.error('❌ Strategy reinitialization failed:', (strategyError as Error).message);
+        }
+
+        logger.info('✅ Service recovery completed');
+
+        try {
+          await telegramBot.sendMessage(`✅ RECOVERY SUCCESSFUL\n\nAll services have been restarted.\nBot is back to normal operation.`);
+        } catch (telegramError) {
+          logger.error('Failed to send recovery success notification:', telegramError);
+        }
+      }
+
+    } catch (recoveryError) {
+      logger.error('❌ Service recovery failed:', (recoveryError as Error).message);
+
+      try {
+        await telegramBot.sendMessage(`❌ RECOVERY FAILED\n\nAutomatic recovery failed: ${(recoveryError as Error).message}\n\nBot will continue attempting to operate.`);
+      } catch (telegramError) {
+        logger.error('Failed to send recovery failure notification:', telegramError);
+      }
     }
   }
 }
@@ -264,15 +352,34 @@ process.on('SIGTERM', async () => {
   process.exit(0);
 });
 
-// Handle uncaught exceptions
-process.on('uncaughtException', (error: Error) => {
-  logger.error('Uncaught Exception:', error);
-  process.exit(1);
+// Handle uncaught exceptions with recovery
+process.on('uncaughtException', async (error: Error) => {
+  logger.error('⚠️ UNCAUGHT EXCEPTION - Attempting recovery:', error.message);
+  logger.error('Stack trace:', error.stack);
+
+  try {
+    // Attempt to notify via Telegram
+    await telegramBot.sendMessage(`🚨 CRITICAL ERROR - Bot attempting recovery\n\nError: ${error.message}\n\nBot will try to continue...`);
+  } catch (telegramError) {
+    logger.error('Failed to send error notification:', telegramError);
+  }
+
+  // Try to continue instead of exiting
+  logger.info('🔄 Continuing operation after exception...');
 });
 
-process.on('unhandledRejection', (reason: any, promise: Promise<any>) => {
-  logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  process.exit(1);
+process.on('unhandledRejection', async (reason: any, promise: Promise<any>) => {
+  logger.error('⚠️ UNHANDLED REJECTION - Attempting recovery:', reason);
+
+  try {
+    // Attempt to notify via Telegram
+    await telegramBot.sendMessage(`🚨 PROMISE REJECTION - Bot continuing\n\nReason: ${String(reason)}\n\nBot operation continues...`);
+  } catch (telegramError) {
+    logger.error('Failed to send rejection notification:', telegramError);
+  }
+
+  // Continue operation instead of exiting
+  logger.info('🔄 Continuing operation after promise rejection...');
 });
 
 export default bot;
