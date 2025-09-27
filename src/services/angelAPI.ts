@@ -425,6 +425,184 @@ class AngelAPI {
     });
   }
 
+  // 🚀 PHASE 2 ADDITION: Enhanced Options Greeks with real-time data
+  public async getOptionsGreeks(
+    exchange: string,
+    tradingSymbol: string,
+    symbolToken: string,
+    strike: number,
+    optionType: 'CE' | 'PE' | undefined,
+    expiry: string
+  ): Promise<GreeksData | null> {
+    try {
+      logger.info(`📊 Fetching Greeks for ${tradingSymbol} (${symbolToken})`);
+
+      // Method 1: Try direct Greeks API if available
+      const greeksResponse = await this.makeRequest(
+        '/rest/secure/angelbroking/order/v1/optionGreeks',
+        'POST',
+        {
+          exchange,
+          symbolname: tradingSymbol,
+          strikeprice: strike.toString(),
+          optiontype: optionType
+        }
+      ).catch(() => null);
+
+      if (greeksResponse?.data) {
+        const greeksData = greeksResponse.data;
+        logger.info(`✅ Greeks API data received for ${tradingSymbol}`);
+
+        return {
+          delta: parseFloat(greeksData.delta || '0'),
+          gamma: parseFloat(greeksData.gamma || '0'),
+          theta: parseFloat(greeksData.theta || '0'),
+          vega: parseFloat(greeksData.vega || '0'),
+          impliedVolatility: parseFloat(greeksData.iv || '0'),
+          intrinsicValue: parseFloat(greeksData.intrinsicvalue || '0'),
+          timeValue: parseFloat(greeksData.timevalue || '0'),
+          lastUpdated: new Date(),
+          confidence: 95 // High confidence for API data
+        };
+      }
+
+      // Method 2: Estimate Greeks from option price and underlying price
+      logger.info(`📊 Estimating Greeks for ${tradingSymbol} (API unavailable)`);
+      const estimatedGreeks = await this.estimateOptionsGreeks(
+        exchange,
+        tradingSymbol,
+        symbolToken,
+        strike,
+        optionType,
+        expiry
+      );
+
+      return estimatedGreeks;
+
+    } catch (error) {
+      logger.error(`Failed to get Greeks for ${tradingSymbol}:`, (error as Error).message);
+      return null;
+    }
+  }
+
+  // Estimate Options Greeks when API data is unavailable
+  private async estimateOptionsGreeks(
+    exchange: string,
+    tradingSymbol: string,
+    symbolToken: string,
+    strike: number,
+    optionType: 'CE' | 'PE' | undefined,
+    expiry: string
+  ): Promise<GreeksData | null> {
+    try {
+      // Get current option price
+      const optionPrice = await this.getOptionPrice(tradingSymbol, symbolToken);
+      if (!optionPrice) return null;
+
+      // Get underlying price (NIFTY or BANKNIFTY)
+      const underlyingPrice = await this.getUnderlyingPrice(tradingSymbol);
+      if (!underlyingPrice) return null;
+
+      // Calculate days to expiry
+      const daysToExpiry = this.calculateDaysToExpiry(expiry);
+      const timeToExpiry = daysToExpiry / 365; // Years
+
+      // Estimate Greeks using simplified Black-Scholes approximations
+      const isCall = optionType === 'CE';
+      const moneyness = underlyingPrice / strike;
+
+      // Simplified Delta estimation
+      let delta = 0;
+      if (isCall) {
+        delta = moneyness > 1 ? 0.7 : moneyness > 0.95 ? 0.5 : 0.3;
+      } else {
+        delta = moneyness < 1 ? -0.7 : moneyness < 1.05 ? -0.5 : -0.3;
+      }
+
+      // Simplified Gamma estimation (highest for ATM options)
+      const gamma = Math.max(0, 0.02 * (1 - Math.abs(moneyness - 1) * 2));
+
+      // Simplified Theta estimation (time decay)
+      const theta = -optionPrice / (daysToExpiry || 1) * 0.3; // Rough daily decay
+
+      // Simplified Vega estimation
+      const vega = optionPrice * Math.sqrt(timeToExpiry) * 0.1;
+
+      // Estimate IV based on option premium
+      const intrinsicValue = Math.max(0, isCall ? underlyingPrice - strike : strike - underlyingPrice);
+      const timeValue = Math.max(0, optionPrice - intrinsicValue);
+      const impliedVolatility = timeValue > 0 ? (timeValue / underlyingPrice) * 100 : 15; // Default to 15%
+
+      logger.info(`📊 Estimated Greeks for ${tradingSymbol}: Delta=${delta.toFixed(3)}, Gamma=${gamma.toFixed(3)}, Theta=${theta.toFixed(2)}, IV=${impliedVolatility.toFixed(1)}%`);
+
+      return {
+        delta,
+        gamma,
+        theta,
+        vega,
+        impliedVolatility,
+        intrinsicValue,
+        timeValue,
+        lastUpdated: new Date(),
+        confidence: 70 // Lower confidence for estimated data
+      };
+
+    } catch (error) {
+      logger.error(`Failed to estimate Greeks:`, (error as Error).message);
+      return null;
+    }
+  }
+
+  // Get underlying index price
+  private async getUnderlyingPrice(optionSymbol: string): Promise<number | null> {
+    try {
+      const isNifty = optionSymbol.includes('NIFTY') && !optionSymbol.includes('BANK');
+      const isBankNifty = optionSymbol.includes('BANKNIFTY') || optionSymbol.includes('NIFTY BANK');
+
+      let token: string;
+      if (isNifty) {
+        token = config.indices.NIFTY.token;
+      } else if (isBankNifty) {
+        token = config.indices.BANKNIFTY.token;
+      } else {
+        return null;
+      }
+
+      const response = await this.getQuote('NSE', isNifty ? 'NIFTY 50' : 'NIFTY BANK', token);
+      return response?.ltp ? parseFloat(response.ltp) : null;
+
+    } catch (error) {
+      logger.error('Failed to get underlying price:', (error as Error).message);
+      return null;
+    }
+  }
+
+  // Calculate days to expiry
+  private calculateDaysToExpiry(expiry: string): number {
+    try {
+      // Parse expiry format DDMMMYY (e.g., "12SEP24")
+      const day = parseInt(expiry.substring(0, 2));
+      const month = expiry.substring(2, 5);
+      const year = 2000 + parseInt(expiry.substring(5, 7));
+
+      const monthMap: { [key: string]: number } = {
+        'JAN': 0, 'FEB': 1, 'MAR': 2, 'APR': 3, 'MAY': 4, 'JUN': 5,
+        'JUL': 6, 'AUG': 7, 'SEP': 8, 'OCT': 9, 'NOV': 10, 'DEC': 11
+      };
+
+      const expiryDate = new Date(year, monthMap[month], day);
+      const today = new Date();
+      const diffTime = expiryDate.getTime() - today.getTime();
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+      return Math.max(0, diffDays);
+
+    } catch (error) {
+      logger.error('Failed to calculate days to expiry:', (error as Error).message);
+      return 7; // Default to 7 days
+    }
+  }
+
   public async getOptionPrice(
     tradingSymbol: string,
     symbolToken: string

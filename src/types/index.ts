@@ -174,6 +174,19 @@ export interface TradingStats {
 export type PriceSubscriber = (indexName: string, priceUpdate: PriceUpdate) => void;
 export type SignalHandler = (signal: TradingSignal) => void;
 
+// 🚀 PHASE 2 ADDITION: Options Greeks data structure
+export interface GreeksData {
+  delta: number;          // Price sensitivity to underlying price change
+  gamma: number;          // Rate of change of delta
+  theta: number;          // Time decay (daily)
+  vega: number;           // Volatility sensitivity
+  impliedVolatility: number; // Implied volatility percentage
+  intrinsicValue: number; // Intrinsic value of the option
+  timeValue: number;      // Time value (premium - intrinsic)
+  lastUpdated: Date;      // When the data was last fetched
+  confidence: number;     // Confidence in the data (0-100)
+}
+
 // Utility Types
 export type IndexName = 'NIFTY' | 'BANKNIFTY';
 export type Direction = 'UP' | 'DOWN';

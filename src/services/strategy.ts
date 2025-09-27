@@ -298,17 +298,42 @@ class TradingStrategy {
       return null;
     }
 
-    // Try Strategy 3 first (Multi-Timeframe Confluence) - Highest accuracy
-    const confluenceSignal = await this.analyzeMultiTimeframeConfluence(indexName, currentPrice, prices, priceBuffer);
-    if (confluenceSignal) return confluenceSignal;
+    // 🚀 PHASE 1 OPTIMIZATION: Time-based strategy selection
+    const optimalStrategy = this.getOptimalStrategyForTime();
+    const currentTime = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' });
 
-    // Try Strategy 1 (Bollinger + RSI) - High accuracy
-    const bollingerSignal = await this.analyzeBollingerRSIStrategy(indexName, currentPrice, prices, priceBuffer);
-    if (bollingerSignal) return bollingerSignal;
+    // Log strategy selection every 60 seconds
+    const shouldLogStrategy = Date.now() % 60000 < 1000;
+    if (shouldLogStrategy) {
+      logger.info(`🕒 ${indexName} - Time: ${currentTime} | Optimal Strategy: ${optimalStrategy} | All strategies will run but ${optimalStrategy} gets priority`);
+    }
 
-    // Try Strategy 2 (Price Action + Momentum) - Fast response
-    const priceActionSignal = await this.analyzePriceActionStrategy(indexName, currentPrice, prices, priceBuffer);
-    if (priceActionSignal) return priceActionSignal;
+    // 🚀 PHASE 1 OPTIMIZATION: Execute strategies in time-optimized order
+    const strategies = this.getStrategyExecutionOrder(optimalStrategy);
+
+    for (const strategyName of strategies) {
+      let signal: TradingSignal | null = null;
+
+      switch (strategyName) {
+        case 'Multi-Timeframe':
+          signal = await this.analyzeMultiTimeframeConfluence(indexName, currentPrice, prices, priceBuffer);
+          break;
+        case 'Bollinger+RSI':
+          signal = await this.analyzeBollingerRSIStrategy(indexName, currentPrice, prices, priceBuffer);
+          break;
+        case 'Price Action':
+          signal = await this.analyzePriceActionStrategy(indexName, currentPrice, prices, priceBuffer);
+          break;
+      }
+
+      // Apply time-based confidence boost to optimal strategy
+      if (signal && strategyName === optimalStrategy) {
+        signal.confidence = Math.min(98, signal.confidence + 5); // 5% boost for optimal strategy
+        logger.info(`🕒 Time-optimal strategy boost: ${strategyName} confidence: ${(signal.confidence - 5).toFixed(1)}% → ${signal.confidence.toFixed(1)}%`);
+      }
+
+      if (signal) return signal;
+    }
 
     return null; // No signals from any strategy
   }
@@ -374,12 +399,20 @@ class TradingStrategy {
       time_filter: this.isWithinTradingHours(indexName)
     };
 
-    // ✅ SCORING SYSTEM: Require 5/6 conditions (including VWAP)
+    // ✅ DYNAMIC SCORING SYSTEM: Adaptive thresholds based on market conditions
     const mtfCEScore = Object.values(mtfCEConditions).filter(c => c === true).length;
     const mtfPEScore = Object.values(mtfPEConditions).filter(c => c === true).length;
-    
-    const mtfCEMet = mtfCEScore >= 5; // 5 out of 6 conditions (higher bar with VWAP)
-    const mtfPEMet = mtfPEScore >= 5; // 5 out of 6 conditions (higher bar with VWAP)
+
+    // 🚀 PHASE 1 OPTIMIZATION: Dynamic threshold calculation
+    const volatilityBonus = volatility.isExpanding ? -1 : 0; // Lower threshold in expanding volatility
+    const confluenceBonus = confluenceScore > 75 ? -1 : 0; // Lower threshold for high confluence
+    const vwapBonus = Math.abs(vwapData.priceVsVwap) > 0.1 ? -1 : 0; // Lower threshold for strong VWAP signals
+
+    const dynamicCEThreshold = Math.max(3, 5 + volatilityBonus + confluenceBonus + vwapBonus);
+    const dynamicPEThreshold = Math.max(3, 5 + volatilityBonus + confluenceBonus + vwapBonus);
+
+    const mtfCEMet = mtfCEScore >= dynamicCEThreshold; // Dynamic threshold (3-5 conditions)
+    const mtfPEMet = mtfPEScore >= dynamicPEThreshold; // Dynamic threshold (3-5 conditions)
 
     // Log multi-timeframe analysis every 20 seconds (less frequent due to complexity)
     const shouldLogMTF = Date.now() % 20000 < 1000;
@@ -388,15 +421,16 @@ class TradingStrategy {
       logger.info(`   💰 Price: ${currentPrice} | VWAP: ${vwapData.vwap} (${vwapData.priceVsVwap > 0 ? '+' : ''}${vwapData.priceVsVwap.toFixed(2)}%) | Trend: ${vwapData.vwapTrend}`);
       logger.info(`   📊 RSI: 1t=${rsi1.toFixed(1)} | 5t=${rsi5.toFixed(1)} | 10t=${rsi10.toFixed(1)} | Confluence: ${confluenceScore.toFixed(0)}%`);
       logger.info(`   📈 Momentum: 1t=${momentum1.toFixed(2)}% | 5t=${momentum5.toFixed(2)}% | 10t=${momentum10.toFixed(2)}%`);
-      logger.info(`   🎯 CE: ${mtfCEScore}/6 (need 5+) | PE: ${mtfPEScore}/6 (need 5+)`);
+      logger.info(`   🎯 CE: ${mtfCEScore}/6 (need ${dynamicCEThreshold}+) | PE: ${mtfPEScore}/6 (need ${dynamicPEThreshold}+)`);
+      logger.info(`   🚀 Dynamic Thresholds: Vol=${volatilityBonus}, Conf=${confluenceBonus}, VWAP=${vwapBonus}`);
 
       // Show CE condition status
-      if (mtfCEScore < 5) {
+      if (mtfCEScore < dynamicCEThreshold) {
         logger.info(`   📋 CE Missing: ${mtfCEConditions.rsi_bullish ? '' : 'RSI-Bullish '} ${mtfCEConditions.trend_alignment ? '' : 'Trend-Aligned '} ${mtfCEConditions.momentum_strong ? '' : 'Momentum '} ${mtfCEConditions.confluence_good ? '' : 'Confluence '} ${mtfCEConditions.vwap_bullish ? '' : 'VWAP-Bullish '} ${mtfCEConditions.time_filter ? '' : 'Time'}`);
       }
 
       // Show PE condition status
-      if (mtfPEScore < 5) {
+      if (mtfPEScore < dynamicPEThreshold) {
         logger.info(`   📋 PE Missing: ${mtfPEConditions.rsi_bearish ? '' : 'RSI-Bearish '} ${mtfPEConditions.trend_alignment ? '' : 'Trend-Aligned '} ${mtfPEConditions.momentum_strong ? '' : 'Momentum '} ${mtfPEConditions.confluence_good ? '' : 'Confluence '} ${mtfPEConditions.vwap_bearish ? '' : 'VWAP-Bearish '} ${mtfPEConditions.time_filter ? '' : 'Time'}`);
       }
     }
@@ -501,12 +535,20 @@ class TradingStrategy {
       time_filter: this.isWithinTradingHours(indexName)
     };
 
-    // ✅ SCORING SYSTEM: Require 5/7 conditions (including VWAP)
+    // 🚀 DYNAMIC SCORING SYSTEM: Adaptive thresholds for Bollinger strategy
     const bollingerCEScore = Object.values(bollingerCEConditions).filter(c => c === true).length;
     const bollingerPEScore = Object.values(bollingerPEConditions).filter(c => c === true).length;
-    
-    const bollingerCEMet = bollingerCEScore >= 5; // 5 out of 7 conditions
-    const bollingerPEMet = bollingerPEScore >= 5; // 5 out of 7 conditions
+
+    // Dynamic threshold calculation for Bollinger strategy
+    const bollingerVolBonus = bollinger.squeeze ? -1 : 0; // Lower threshold during squeeze
+    const bollingerVwapBonus = Math.abs(vwapData.priceVsVwap) > 0.15 ? -1 : 0; // Strong VWAP signals
+    const bollingerRsiBonus = (rsi < 35 || rsi > 65) ? -1 : 0; // Extreme RSI levels
+
+    const dynamicBollingerCEThreshold = Math.max(3, 5 + bollingerVolBonus + bollingerVwapBonus + bollingerRsiBonus);
+    const dynamicBollingerPEThreshold = Math.max(3, 5 + bollingerVolBonus + bollingerVwapBonus + bollingerRsiBonus);
+
+    const bollingerCEMet = bollingerCEScore >= dynamicBollingerCEThreshold; // Dynamic threshold (3-5 conditions)
+    const bollingerPEMet = bollingerPEScore >= dynamicBollingerPEThreshold; // Dynamic threshold (3-5 conditions)
 
     // Log strategy 1 analysis every 15 seconds
     const shouldLogBollinger = Date.now() % 15000 < 1000;
@@ -514,15 +556,16 @@ class TradingStrategy {
       logger.info(`🎯 ${indexName} Bollinger+RSI Strategy (OPTIMIZED + VWAP):`);
       logger.info(`   💰 Price: ${currentPrice} | VWAP: ${vwapData.vwap} (${vwapData.priceVsVwap > 0 ? '+' : ''}${vwapData.priceVsVwap.toFixed(2)}%) | Trend: ${vwapData.vwapTrend}`);
       logger.info(`   📊 BB: Upper=${bollinger.upper.toFixed(2)} | Middle=${bollinger.middle.toFixed(2)} | Lower=${bollinger.lower.toFixed(2)} | Squeeze=${bollinger.squeeze}`);
-      logger.info(`   📈 RSI: ${rsi.toFixed(2)} | Momentum: ${momentum.toFixed(2)}% | CE: ${bollingerCEScore}/7 (need 5+) | PE: ${bollingerPEScore}/7 (need 5+)`);
+      logger.info(`   📈 RSI: ${rsi.toFixed(2)} | Momentum: ${momentum.toFixed(2)}% | CE: ${bollingerCEScore}/7 (need ${dynamicBollingerCEThreshold}+) | PE: ${bollingerPEScore}/7 (need ${dynamicBollingerPEThreshold}+)`);
+      logger.info(`   🚀 Bollinger Thresholds: Squeeze=${bollingerVolBonus}, VWAP=${bollingerVwapBonus}, RSI=${bollingerRsiBonus}`);
 
       // Show CE condition status
-      if (bollingerCEScore < 5) {
+      if (bollingerCEScore < dynamicBollingerCEThreshold) {
         logger.info(`   📋 CE Missing: ${bollingerCEConditions.price_near_lower ? '' : 'Near-Lower '} ${bollingerCEConditions.rsi_recovery_zone ? '' : 'RSI-Zone '} ${bollingerCEConditions.trend_or_squeeze ? '' : 'Trend/Squeeze '} ${bollingerCEConditions.momentum_decent ? '' : 'Momentum '} ${bollingerCEConditions.volatility_favorable ? '' : 'Volatility '} ${bollingerCEConditions.vwap_supportive ? '' : 'VWAP-Support '} ${bollingerCEConditions.time_filter ? '' : 'Time'}`);
       }
 
-      // Show PE condition status  
-      if (bollingerPEScore < 5) {
+      // Show PE condition status
+      if (bollingerPEScore < dynamicBollingerPEThreshold) {
         logger.info(`   📋 PE Missing: ${bollingerPEConditions.price_near_upper ? '' : 'Near-Upper '} ${bollingerPEConditions.rsi_decline_zone ? '' : 'RSI-Zone '} ${bollingerPEConditions.trend_or_squeeze ? '' : 'Trend/Squeeze '} ${bollingerPEConditions.momentum_decent ? '' : 'Momentum '} ${bollingerPEConditions.volatility_favorable ? '' : 'Volatility '} ${bollingerPEConditions.vwap_resistive ? '' : 'VWAP-Resist '} ${bollingerPEConditions.time_filter ? '' : 'Time'}`);
       }
 
@@ -643,12 +686,20 @@ class TradingStrategy {
       time_filter: this.isWithinTradingHours(indexName)
     };
 
-    // ✅ SCORING SYSTEM: Require 5/7 conditions (including VWAP)
+    // 🚀 DYNAMIC SCORING SYSTEM: Adaptive thresholds for Price Action strategy
     const priceActionCEScore = Object.values(priceActionCEConditions).filter(c => c === true).length;
     const priceActionPEScore = Object.values(priceActionPEConditions).filter(c => c === true).length;
-    
-    const actionCEMet = priceActionCEScore >= 5; // 5 out of 7 conditions
-    const actionPEMet = priceActionPEScore >= 5; // 5 out of 7 conditions
+
+    // Dynamic threshold calculation for Price Action strategy
+    const actionMomentumBonus = Math.abs(momentum) > this.getMomentumThreshold(indexName) * 1.5 ? -1 : 0; // Strong momentum
+    const actionSupportResistanceBonus = (supportResistance.nearSupport || supportResistance.nearResistance) ? -1 : 0; // Near key levels
+    const actionVwapBonus = Math.abs(vwapData.priceVsVwap) > 0.2 ? -1 : 0; // Strong VWAP deviation
+
+    const dynamicActionCEThreshold = Math.max(3, 5 + actionMomentumBonus + actionSupportResistanceBonus + actionVwapBonus);
+    const dynamicActionPEThreshold = Math.max(3, 5 + actionMomentumBonus + actionSupportResistanceBonus + actionVwapBonus);
+
+    const actionCEMet = priceActionCEScore >= dynamicActionCEThreshold; // Dynamic threshold (3-5 conditions)
+    const actionPEMet = priceActionPEScore >= dynamicActionPEThreshold; // Dynamic threshold (3-5 conditions)
 
     // Log strategy 2 analysis every 15 seconds
     const shouldLogAction = Date.now() % 15000 < 1000;
@@ -656,15 +707,16 @@ class TradingStrategy {
       logger.info(`🚀 ${indexName} Price Action Strategy (OPTIMIZED + VWAP):`);
       logger.info(`   💰 Price: ${currentPrice} | SMA: ${sma.toFixed(2)} | VWAP: ${vwapData.vwap} (${vwapData.priceVsVwap > 0 ? '+' : ''}${vwapData.priceVsVwap.toFixed(2)}%)`);
       logger.info(`   📊 RSI: ${rsi.toFixed(2)} | Momentum: ${momentum.toFixed(2)}% | VWAP Trend: ${vwapData.vwapTrend} | S/R: ${supportResistance.nearSupport ? 'Support' : ''} ${supportResistance.nearResistance ? 'Resistance' : ''}`);
-      logger.info(`   📈 CE: ${priceActionCEScore}/7 (need 5+) | PE: ${priceActionPEScore}/7 (need 5+)`);
+      logger.info(`   📈 CE: ${priceActionCEScore}/7 (need ${dynamicActionCEThreshold}+) | PE: ${priceActionPEScore}/7 (need ${dynamicActionPEThreshold}+)`);
+      logger.info(`   🚀 Action Thresholds: Momentum=${actionMomentumBonus}, S/R=${actionSupportResistanceBonus}, VWAP=${actionVwapBonus}`);
 
       // Show CE condition status
-      if (priceActionCEScore < 5) {
+      if (priceActionCEScore < dynamicActionCEThreshold) {
         logger.info(`   📋 CE Missing: ${priceActionCEConditions.momentum_positive ? '' : 'Momentum+ '} ${priceActionCEConditions.trend_favorable ? '' : 'Trend '} ${priceActionCEConditions.support_or_momentum ? '' : 'Support/Mom '} ${priceActionCEConditions.rsi_reasonable ? '' : 'RSI-Range '} ${priceActionCEConditions.price_action_decent ? '' : 'Price-Action '} ${priceActionCEConditions.vwap_aligned ? '' : 'VWAP-Aligned '} ${priceActionCEConditions.time_filter ? '' : 'Time'}`);
       }
 
       // Show PE condition status
-      if (priceActionPEScore < 5) {
+      if (priceActionPEScore < dynamicActionPEThreshold) {
         logger.info(`   📋 PE Missing: ${priceActionPEConditions.momentum_negative ? '' : 'Momentum- '} ${priceActionPEConditions.trend_favorable ? '' : 'Trend '} ${priceActionPEConditions.resistance_or_momentum ? '' : 'Resist/Mom '} ${priceActionPEConditions.rsi_reasonable ? '' : 'RSI-Range '} ${priceActionPEConditions.price_action_decent ? '' : 'Price-Action '} ${priceActionPEConditions.vwap_aligned ? '' : 'VWAP-Aligned '} ${priceActionPEConditions.time_filter ? '' : 'Time'}`);
       }
     }
@@ -1752,6 +1804,126 @@ class TradingStrategy {
     riskManager.resetState();
 
     logger.info('✅ Strategy state reset complete');
+  }
+
+  // 🚀 PHASE 1 OPTIMIZATION: Time-based strategy optimization methods
+  private getOptimalStrategyForTime(): 'Multi-Timeframe' | 'Bollinger+RSI' | 'Price Action' {
+    const now = new Date();
+    const istTime = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+    const hour = istTime.getHours();
+    const minute = istTime.getMinutes();
+    const timeValue = hour * 100 + minute; // Convert to HHMM format
+
+    // NSE Research-Based Time Optimization:
+
+    // 9:30-10:30: High volatility opening session - Momentum/Breakout strategies work best
+    if (timeValue >= 930 && timeValue <= 1030) {
+      return 'Price Action'; // Fast momentum capture
+    }
+
+    // 10:30-11:30: Early consolidation - Multi-timeframe confluence optimal
+    if (timeValue >= 1030 && timeValue <= 1130) {
+      return 'Multi-Timeframe'; // High accuracy when volatility settles
+    }
+
+    // 11:30-13:30: Mid-day range trading - Mean reversion strategies perform best
+    if (timeValue >= 1130 && timeValue <= 1330) {
+      return 'Bollinger+RSI'; // Bollinger squeezes and RSI extremes common
+    }
+
+    // 13:30-14:30: Pre-close momentum - Multi-timeframe confluence
+    if (timeValue >= 1330 && timeValue <= 1430) {
+      return 'Multi-Timeframe'; // Institutional positioning
+    }
+
+    // 14:30-15:30: Final hour volatility - Price action momentum
+    if (timeValue >= 1430 && timeValue <= 1530) {
+      return 'Price Action'; // Final push movements
+    }
+
+    // Default to Multi-timeframe for any edge cases
+    return 'Multi-Timeframe';
+  }
+
+  private getStrategyExecutionOrder(optimalStrategy: string): string[] {
+    // Always try optimal strategy first, then others in order of general effectiveness
+    const allStrategies = ['Multi-Timeframe', 'Bollinger+RSI', 'Price Action'];
+
+    // Move optimal strategy to front
+    const orderedStrategies = [optimalStrategy];
+    allStrategies.forEach(strategy => {
+      if (strategy !== optimalStrategy) {
+        orderedStrategies.push(strategy);
+      }
+    });
+
+    return orderedStrategies;
+  }
+
+  // 🚀 PHASE 1 ADDITION: Enhanced time-based trading hours with strategy context
+  public getTimeBasedTradingContext(): {
+    currentPhase: string;
+    optimalStrategy: string;
+    characteristics: string[];
+    expectedVolatility: 'LOW' | 'MEDIUM' | 'HIGH';
+  } {
+    const now = new Date();
+    const istTime = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+    const hour = istTime.getHours();
+    const minute = istTime.getMinutes();
+    const timeValue = hour * 100 + minute;
+
+    if (timeValue >= 930 && timeValue <= 1030) {
+      return {
+        currentPhase: 'Opening Session',
+        optimalStrategy: 'Price Action',
+        characteristics: ['High volatility', 'Gap movements', 'Momentum trading', 'Quick reversals'],
+        expectedVolatility: 'HIGH'
+      };
+    }
+
+    if (timeValue >= 1030 && timeValue <= 1130) {
+      return {
+        currentPhase: 'Early Consolidation',
+        optimalStrategy: 'Multi-Timeframe',
+        characteristics: ['Volatility settling', 'Trend establishment', 'Confluence signals', 'Institutional entry'],
+        expectedVolatility: 'MEDIUM'
+      };
+    }
+
+    if (timeValue >= 1130 && timeValue <= 1330) {
+      return {
+        currentPhase: 'Mid-Day Range',
+        optimalStrategy: 'Bollinger+RSI',
+        characteristics: ['Range-bound trading', 'Mean reversion', 'Bollinger squeezes', 'RSI extremes'],
+        expectedVolatility: 'LOW'
+      };
+    }
+
+    if (timeValue >= 1330 && timeValue <= 1430) {
+      return {
+        currentPhase: 'Pre-Close Positioning',
+        optimalStrategy: 'Multi-Timeframe',
+        characteristics: ['Institutional positioning', 'Confluence signals', 'Trend continuation', 'Volume increase'],
+        expectedVolatility: 'MEDIUM'
+      };
+    }
+
+    if (timeValue >= 1430 && timeValue <= 1530) {
+      return {
+        currentPhase: 'Final Hour',
+        optimalStrategy: 'Price Action',
+        characteristics: ['Final push movements', 'Closing volatility', 'Momentum plays', 'Quick scalping'],
+        expectedVolatility: 'HIGH'
+      };
+    }
+
+    return {
+      currentPhase: 'Outside Market Hours',
+      optimalStrategy: 'Multi-Timeframe',
+      characteristics: ['Market closed', 'No trading'],
+      expectedVolatility: 'LOW'
+    };
   }
 }
 
