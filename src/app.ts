@@ -4,6 +4,7 @@ import { telegramBot } from './services/telegramBot';
 import { orderService } from './services/orderService';
 import { healthServer } from './services/healthServer';
 import { healthMonitor } from './services/healthMonitor';
+import { performanceMonitor } from './services/performanceMonitor';
 import { logger } from './utils/logger';
 import { dailyCleanup } from './utils/dailyCleanup';
 import { startupReset } from './utils/startupReset';
@@ -41,6 +42,9 @@ class WebSocketTradingBot {
 
       // Start health server first
       healthServer.start();
+
+      // 📊 Initialize performance monitoring
+      performanceMonitor.initialize();
 
       // Initialize daily cleanup manager
       dailyCleanup.initialize();

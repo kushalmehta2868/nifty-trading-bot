@@ -20,6 +20,7 @@
         "node-cron": "^3.0.2",
         "node-telegram-bot-api": "^0.61.0",
         "speakeasy": "^2.0.0",
+        "uuid": "^13.0.0",
         "winston": "^3.10.0",
         "ws": "^8.14.0"
     },

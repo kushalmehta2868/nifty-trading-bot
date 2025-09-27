@@ -558,7 +558,6 @@ class PaperTradingEngine {
       score += 5;
     }
 
-    logger.info(`');
     logger.info(`Overall Score: ${score}/100`);
 
     if (score >= 75) {

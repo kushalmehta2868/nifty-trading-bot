@@ -6,8 +6,26 @@ import { logger } from '../utils/logger';
 import {
   AngelTokens,
   AngelLoginResponse,
-  AngelProfileResponse
+  AngelProfileResponse,
+  GreeksData
 } from '../types';
+import { performanceMonitor } from './performanceMonitor';
+
+interface QueuedRequest {
+  request: () => Promise<any>;
+  resolve: (value: any) => void;
+  reject: (error: any) => void;
+  priority: number;
+  timestamp: number;
+}
+
+interface RequestMetrics {
+  totalRequests: number;
+  successfulRequests: number;
+  failedRequests: number;
+  avgResponseTime: number;
+  lastRequestTime: number;
+}
 
 class AngelAPI {
   private baseURL = 'https://apiconnect.angelbroking.com';
@@ -16,6 +34,21 @@ class AngelAPI {
   private _feedToken: string | null = null;
   private refreshToken: string | null = null;
   private tokensFile = 'angel-tokens.json';
+
+  // 🚀 PERFORMANCE OPTIMIZATION: Request batching and caching
+  private requestQueue: QueuedRequest[] = [];
+  private processingQueue = false;
+  private requestCache: Map<string, { data: any; timestamp: number }> = new Map();
+  private metrics: RequestMetrics = {
+    totalRequests: 0,
+    successfulRequests: 0,
+    failedRequests: 0,
+    avgResponseTime: 0,
+    lastRequestTime: 0
+  };
+  private readonly CACHE_TTL = 5000; // 5 seconds cache
+  private readonly MAX_BATCH_SIZE = 5;
+  private readonly BATCH_DELAY = 10; // 10ms between batches
 
   get jwtToken(): string | null {
     return this._jwtToken;
@@ -199,56 +232,170 @@ class AngelAPI {
     }
   }
 
+  // 🚀 OPTIMIZED: Request batching and caching system
+  private generateCacheKey(endpoint: string, method: string, data: any): string {
+    return `${method}:${endpoint}:${JSON.stringify(data)}`;
+  }
+
+  private async batchProcessRequests(): Promise<void> {
+    if (this.processingQueue || this.requestQueue.length === 0) return;
+
+    this.processingQueue = true;
+
+    // Sort by priority (higher priority first), then by timestamp (FIFO)
+    this.requestQueue.sort((a, b) => {
+      if (a.priority !== b.priority) return b.priority - a.priority;
+      return a.timestamp - b.timestamp;
+    });
+
+    const batch = this.requestQueue.splice(0, this.MAX_BATCH_SIZE);
+
+    // Process batch in parallel with controlled concurrency
+    await Promise.allSettled(batch.map(async ({ request, resolve, reject }) => {
+      const startTime = Date.now();
+      try {
+        const result = await request();
+        const responseTime = Date.now() - startTime;
+        this.updateMetrics(true, responseTime);
+
+        // 📊 Record API performance in global monitor
+        performanceMonitor.recordApiLatency(responseTime);
+
+        resolve(result);
+      } catch (error) {
+        const responseTime = Date.now() - startTime;
+        this.updateMetrics(false, responseTime);
+
+        // 📊 Record API error
+        performanceMonitor.recordError('API_ERROR');
+
+        reject(error);
+      }
+    }));
+
+    this.processingQueue = false;
+
+    // Schedule next batch if queue has items
+    if (this.requestQueue.length > 0) {
+      setTimeout(() => this.batchProcessRequests(), this.BATCH_DELAY);
+    }
+  }
+
+  private updateMetrics(success: boolean, responseTime: number): void {
+    this.metrics.totalRequests++;
+    this.metrics.lastRequestTime = Date.now();
+
+    if (success) {
+      this.metrics.successfulRequests++;
+    } else {
+      this.metrics.failedRequests++;
+    }
+
+    // Update rolling average response time
+    const totalSuccessful = this.metrics.successfulRequests;
+    this.metrics.avgResponseTime =
+      ((this.metrics.avgResponseTime * (totalSuccessful - 1)) + responseTime) / totalSuccessful;
+  }
+
   public async makeRequest(
     endpoint: string,
     method: 'GET' | 'POST' = 'GET',
-    data: any = null
+    data: any = null,
+    priority: number = 1,
+    useCache: boolean = true
   ): Promise<any> {
     if (!this.isAuthenticated) {
       throw new Error('Not authenticated');
     }
 
-    const headers = {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-      'X-UserType': 'USER',
-      'X-SourceID': 'WEB',
-      'X-ClientLocalIP': this.getLocalIP(),      // Get actual local IP
-      'X-ClientPublicIP': this.getPublicIP(),    // Get actual public IP  
-      'X-MACAddress': this.getMACAddress(),      // Get actual MAC
-      'X-PrivateKey': config.angel.apiKey,
-      'Authorization': `Bearer ${this._jwtToken}`
-    };
+    // Check cache for GET requests
+    if (method === 'GET' && useCache) {
+      const cacheKey = this.generateCacheKey(endpoint, method, data);
+      const cached = this.requestCache.get(cacheKey);
 
-    try {
+      if (cached && (Date.now() - cached.timestamp) < this.CACHE_TTL) {
+        logger.debug(`🚀 Cache hit: ${endpoint}`);
+        return cached.data;
+      }
+    }
 
-      const response = await axios({
-        method,
-        url: `${this.baseURL}${endpoint}`,
-        headers,
-        data,
-        timeout: 30000  // 30 second timeout
+    // Create promise for queued request
+    return new Promise((resolve, reject) => {
+      const requestFn = async () => {
+        const headers = {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'X-UserType': 'USER',
+          'X-SourceID': 'WEB',
+          'X-ClientLocalIP': this.getLocalIP(),
+          'X-ClientPublicIP': this.getPublicIP(),
+          'X-MACAddress': this.getMACAddress(),
+          'X-PrivateKey': config.angel.apiKey,
+          'Authorization': `Bearer ${this._jwtToken}`
+        };
+
+        try {
+          const response = await axios({
+            method,
+            url: `${this.baseURL}${endpoint}`,
+            headers,
+            data,
+            timeout: 15000  // Reduced timeout for faster failure detection
+          });
+
+          // Cache GET responses
+          if (method === 'GET' && useCache) {
+            const cacheKey = this.generateCacheKey(endpoint, method, data);
+            this.requestCache.set(cacheKey, {
+              data: response.data,
+              timestamp: Date.now()
+            });
+          }
+
+          return response.data;
+
+        } catch (error) {
+          if (axios.isAxiosError(error)) {
+            logger.error('❌ API Error:', {
+              status: error.response?.status,
+              statusText: error.response?.statusText,
+              data: error.response?.data,
+              endpoint: endpoint
+            });
+
+            if (error.response?.status === 401) {
+              this.isAuthenticated = false;
+              // Re-authenticate and retry
+              if (await this.authenticate()) {
+                return this.makeRequest(endpoint, method, data, priority, useCache);
+              }
+            }
+          }
+          throw error;
+        }
+      };
+
+      // Add to queue
+      this.requestQueue.push({
+        request: requestFn,
+        resolve,
+        reject,
+        priority,
+        timestamp: Date.now()
       });
 
-      return response.data;
-    } catch (error) {
-      if (axios.isAxiosError(error)) {
-        logger.error('❌ API Error:', {
-          status: error.response?.status,
-          statusText: error.response?.statusText,
-          data: error.response?.data,
-          endpoint: endpoint
-        });
+      // Start processing if not already running
+      this.batchProcessRequests();
+    });
+  }
 
-        if (error.response?.status === 401) {
-          this.isAuthenticated = false;
-          if (await this.authenticate()) {
-            return this.makeRequest(endpoint, method, data);
-          }
-        }
-      }
-      throw error;
-    }
+  public getMetrics(): RequestMetrics {
+    return { ...this.metrics };
+  }
+
+  public clearCache(): void {
+    this.requestCache.clear();
+    logger.info('🧹 API cache cleared');
   }
 
   // Helper methods to get actual network info
@@ -302,11 +449,12 @@ class AngelAPI {
     tradingSymbol: string,
     symbolToken: string
   ): Promise<any> {
+    // High priority for real-time price data
     return this.makeRequest('/rest/secure/angelbroking/order/v1/getLTP', 'POST', {
       exchange,
       tradingsymbol: tradingSymbol,
       symboltoken: symbolToken
-    });
+    }, 3, false); // Priority 3, no cache for real-time data
   }
 
   // Search for option contracts

@@ -5,12 +5,13 @@ import {
   PriceUpdate,
   TradingSignal
 } from '../types';
-import { logger } from '../utils/logger';
+import { logger, strategyLogger, withRequestId } from '../utils/logger';
 import { isMarketOpen } from '../utils/marketHours';
 import { angelAPI } from './angelAPI';
 import { webSocketFeed } from './webSocketFeed';
 import { marketVolatility, VolatilityData } from './marketVolatility';
 import { riskManager, SlippageAdjustedPrices } from './riskManager';
+import { performanceMonitor } from './performanceMonitor';
 
 interface PriceBufferItem {
   price: number;
@@ -190,11 +191,19 @@ class TradingStrategy {
 
 
   async processTick(indexName: IndexName, priceUpdate: PriceUpdate): Promise<void> {
+    // 📊 Create request-scoped logger for this tick processing
+    const tickLogger = withRequestId();
+    const tickStartTime = Date.now();
+
     // Skip if market is closed
     if (!isMarketOpen()) {
       const shouldLog = Date.now() % 30000 < 1000; // Log every 30 seconds
       if (shouldLog) {
-        logger.info(`🔒 ${indexName} - Market closed, skipping analysis`);
+        tickLogger.info(`🔒 ${indexName} - Market closed, skipping analysis`, {
+          indexName,
+          operation: 'tick_processing',
+          reason: 'market_closed'
+        });
       }
       return;
     }
@@ -231,12 +240,28 @@ class TradingStrategy {
     const signal = await this.analyzeSignal(indexName, priceUpdate.price, buffer);
 
     if (signal && signal.confidence >= config.strategy.confidenceThreshold) {
+      // 📊 Create trade-specific logger with signal context
+      const tradeId = tickLogger.trade('SIGNAL_GENERATED', signal, {
+        indexName,
+        symbol: signal.optionSymbol,
+        operation: 'signal_validation'
+      });
+
       // ✅ CRITICAL FIX: Multi-layer duplicate prevention
       const signalKey = indexName; // Use index name for tracking
 
       // Check 1: Active position blocking (most important)
       if (this.activePositions[indexName]) {
-        logger.info(`🔒 ${indexName} - Position already active, blocking ${signal.optionType} signal`);
+        tickLogger.warn(`🔒 ${indexName} - Position already active, blocking ${signal.optionType} signal`, {
+          indexName,
+          tradeId,
+          reason: 'position_active',
+          signal: {
+            confidence: signal.confidence,
+            direction: signal.direction,
+            optionType: signal.optionType
+          }
+        });
         this.logActivePositionsStatus('SIGNAL_BLOCKED');
         return;
       }
@@ -246,28 +271,91 @@ class TradingStrategy {
         const cooldownRemaining = Math.ceil((config.trading.signalCooldown - (Date.now() - (this.lastSignalTime[signalKey] || 0))) / 1000);
         const cooldownMinutes = Math.floor(cooldownRemaining / 60);
         const cooldownSeconds = cooldownRemaining % 60;
-        logger.info(`⏳ ${indexName} - Signal cooldown ACTIVE: ${cooldownMinutes}m ${cooldownSeconds}s remaining (${cooldownRemaining}s total)`);
+
+        tickLogger.info(`⏳ ${indexName} - Signal cooldown ACTIVE: ${cooldownMinutes}m ${cooldownSeconds}s remaining`, {
+          indexName,
+          tradeId,
+          operation: 'cooldown_check',
+          cooldown: {
+            remainingSeconds: cooldownRemaining,
+            remainingMinutes: cooldownMinutes,
+            remainingDisplaySeconds: cooldownSeconds
+          }
+        });
         return;
       }
 
       // ✅ RACE CONDITION FIX: Lock position IMMEDIATELY to prevent duplicate signals
       this.activePositions[indexName] = true;
-      logger.info(`🔒 IMMEDIATE LOCK: ${indexName} - blocking subsequent signals during processing`);
+      tickLogger.info(`🔒 IMMEDIATE LOCK: ${indexName} - blocking subsequent signals during processing`, {
+        indexName,
+        tradeId,
+        operation: 'position_lock'
+      });
       this.logActivePositionsStatus('SIGNAL_PROCESSING');
 
       // ✅ CRITICAL: Set cooldown BEFORE executing signal to prevent race conditions
       this.lastSignalTime[signalKey] = Date.now();
 
       this.executeSignal(signal).catch(error => {
-        logger.error('Failed to execute signal:', error.message);
+        tickLogger.error('Failed to execute signal', error, {
+          indexName,
+          tradeId,
+          operation: 'signal_execution',
+          signal: {
+            confidence: signal.confidence,
+            direction: signal.direction,
+            optionType: signal.optionType
+          }
+        });
+
         // Reset cooldown and unlock position on failure to allow retry
         delete this.lastSignalTime[signalKey];
         this.activePositions[indexName] = false;
-        logger.info(`🔓 UNLOCKED after signal execution failure: ${indexName}`);
+        tickLogger.info(`🔓 UNLOCKED after signal execution failure: ${indexName}`, {
+          indexName,
+          tradeId,
+          operation: 'position_unlock',
+          reason: 'execution_failed'
+        });
         this.logActivePositionsStatus('SIGNAL_EXECUTION_FAILED');
       });
+
+      // 📊 Log performance metrics for tick processing
+      tickLogger.performance('tick_processing', tickStartTime, {
+        indexName,
+        tradeId,
+        metadata: {
+          bufferSize: buffer.length,
+          signalGenerated: true,
+          signalConfidence: signal.confidence
+        }
+      });
+
     } else if (signal && signal.confidence < config.strategy.confidenceThreshold) {
-      logger.info(`⚠️ ${indexName} - Signal generated but confidence too low: ${signal.confidence.toFixed(1)}% < ${config.strategy.confidenceThreshold}%`);
+      tickLogger.info(`⚠️ ${indexName} - Signal generated but confidence too low: ${signal.confidence.toFixed(1)}% < ${config.strategy.confidenceThreshold}%`, {
+        indexName,
+        operation: 'signal_validation',
+        signal: {
+          confidence: signal.confidence,
+          threshold: config.strategy.confidenceThreshold,
+          direction: signal.direction,
+          optionType: signal.optionType
+        },
+        reason: 'confidence_too_low'
+      });
+    } else {
+      // 📊 Log performance for non-signal ticks as well
+      const shouldLogPerf = Date.now() % 60000 < 1000; // Every minute
+      if (shouldLogPerf) {
+        tickLogger.performance('tick_processing_no_signal', tickStartTime, {
+          indexName,
+          metadata: {
+            bufferSize: buffer.length,
+            signalGenerated: false
+          }
+        });
+      }
     }
   }
 
@@ -276,6 +364,7 @@ class TradingStrategy {
     currentPrice: number,
     priceBuffer: PriceBufferItem[]
   ): Promise<TradingSignal | null> {
+    const analysisStartTime = Date.now(); // 📊 Performance tracking
     const prices = priceBuffer.map(item => item.price);
 
     if (!this.isWithinTradingHours(indexName)) {
@@ -308,34 +397,65 @@ class TradingStrategy {
       logger.info(`🕒 ${indexName} - Time: ${currentTime} | Optimal Strategy: ${optimalStrategy} | All strategies will run but ${optimalStrategy} gets priority`);
     }
 
-    // 🚀 PHASE 1 OPTIMIZATION: Execute strategies in time-optimized order
-    const strategies = this.getStrategyExecutionOrder(optimalStrategy);
+    // 🚀 P0 OPTIMIZATION: Parallel strategy execution for dramatic speed improvement
+    const startTime = Date.now();
 
-    for (const strategyName of strategies) {
-      let signal: TradingSignal | null = null;
+    // Execute all strategies in parallel
+    const [multiTimeframeSignal, bollingerRSISignal, priceActionSignal] = await Promise.allSettled([
+      this.analyzeMultiTimeframeConfluence(indexName, currentPrice, prices, priceBuffer),
+      this.analyzeBollingerRSIStrategy(indexName, currentPrice, prices, priceBuffer),
+      this.analyzePriceActionStrategy(indexName, currentPrice, prices, priceBuffer)
+    ]);
 
-      switch (strategyName) {
-        case 'Multi-Timeframe':
-          signal = await this.analyzeMultiTimeframeConfluence(indexName, currentPrice, prices, priceBuffer);
-          break;
-        case 'Bollinger+RSI':
-          signal = await this.analyzeBollingerRSIStrategy(indexName, currentPrice, prices, priceBuffer);
-          break;
-        case 'Price Action':
-          signal = await this.analyzePriceActionStrategy(indexName, currentPrice, prices, priceBuffer);
-          break;
-      }
+    const executionTime = Date.now() - startTime;
+    logger.debug(`⚡ ${indexName} - Parallel strategy execution: ${executionTime}ms`);
 
-      // Apply time-based confidence boost to optimal strategy
-      if (signal && strategyName === optimalStrategy) {
-        signal.confidence = Math.min(98, signal.confidence + 5); // 5% boost for optimal strategy
-        logger.info(`🕒 Time-optimal strategy boost: ${strategyName} confidence: ${(signal.confidence - 5).toFixed(1)}% → ${signal.confidence.toFixed(1)}%`);
-      }
+    // 📊 Record performance metrics
+    performanceMonitor.recordSignalLatency(executionTime);
 
-      if (signal) return signal;
+    // Collect successful signals with strategy names
+    const signals: Array<{ signal: TradingSignal; strategyName: string }> = [];
+
+    if (multiTimeframeSignal.status === 'fulfilled' && multiTimeframeSignal.value) {
+      signals.push({ signal: multiTimeframeSignal.value, strategyName: 'Multi-Timeframe' });
+    }
+    if (bollingerRSISignal.status === 'fulfilled' && bollingerRSISignal.value) {
+      signals.push({ signal: bollingerRSISignal.value, strategyName: 'Bollinger+RSI' });
+    }
+    if (priceActionSignal.status === 'fulfilled' && priceActionSignal.value) {
+      signals.push({ signal: priceActionSignal.value, strategyName: 'Price Action' });
     }
 
-    return null; // No signals from any strategy
+    // Log any strategy failures
+    if (multiTimeframeSignal.status === 'rejected') {
+      logger.warn(`⚠️ Multi-Timeframe strategy failed: ${multiTimeframeSignal.reason}`);
+    }
+    if (bollingerRSISignal.status === 'rejected') {
+      logger.warn(`⚠️ Bollinger+RSI strategy failed: ${bollingerRSISignal.reason}`);
+    }
+    if (priceActionSignal.status === 'rejected') {
+      logger.warn(`⚠️ Price Action strategy failed: ${priceActionSignal.reason}`);
+    }
+
+    if (signals.length === 0) {
+      return null; // No successful signals
+    }
+
+    // 🎯 INTELLIGENT SIGNAL SELECTION: Choose best signal based on multiple criteria
+    const bestSignal = this.selectBestSignal(signals, optimalStrategy);
+
+    if (bestSignal) {
+      logger.info(`🏆 ${indexName} - Best signal selected: ${bestSignal.strategyName} (confidence: ${bestSignal.signal.confidence.toFixed(1)}%)`);
+
+      // 📊 Record signal generation
+      performanceMonitor.recordSignalGenerated();
+
+      // 📊 Record total analysis time
+      const totalAnalysisTime = Date.now() - analysisStartTime;
+      logger.debug(`📊 ${indexName} - Total analysis time: ${totalAnalysisTime}ms`);
+    }
+
+    return bestSignal?.signal || null;
   }
 
   // 🏆 STRATEGY 3: Multi-Timeframe Confluence (Highest Accuracy - 90%+)
@@ -1924,6 +2044,66 @@ class TradingStrategy {
       characteristics: ['Market closed', 'No trading'],
       expectedVolatility: 'LOW'
     };
+  }
+
+  // 🎯 INTELLIGENT SIGNAL SELECTION: Choose best signal from multiple strategies
+  private selectBestSignal(
+    signals: Array<{ signal: TradingSignal; strategyName: string }>,
+    optimalStrategy: string
+  ): { signal: TradingSignal; strategyName: string } | null {
+    if (signals.length === 0) return null;
+    if (signals.length === 1) {
+      // Apply time-based confidence boost to optimal strategy
+      if (signals[0].strategyName === optimalStrategy) {
+        signals[0].signal.confidence = Math.min(98, signals[0].signal.confidence + 5);
+        logger.info(`🕒 Time-optimal strategy boost: ${signals[0].strategyName} confidence: ${(signals[0].signal.confidence - 5).toFixed(1)}% → ${signals[0].signal.confidence.toFixed(1)}%`);
+      }
+      return signals[0];
+    }
+
+    // Multi-signal intelligence: Score each signal based on multiple factors
+    const scoredSignals = signals.map(({ signal, strategyName }) => {
+      let score = signal.confidence; // Base score from confidence
+
+      // Time-based strategy preference (boost optimal strategy)
+      if (strategyName === optimalStrategy) {
+        score += 5; // 5-point boost for time-optimal strategy
+        signal.confidence = Math.min(98, signal.confidence + 5); // Also boost confidence
+      }
+
+      // Strategy reliability scoring based on historical performance
+      const strategyMultipliers = {
+        'Multi-Timeframe': 1.2,    // 20% boost - highest accuracy
+        'Bollinger+RSI': 1.1,      // 10% boost - good consistency
+        'Price Action': 1.0        // No boost - fast but less reliable
+      };
+      score *= strategyMultipliers[strategyName as keyof typeof strategyMultipliers] || 1.0;
+
+      // Confluence scoring: Boost if multiple strategies agree on direction
+      const agreementCount = signals.filter(s => s.signal.direction === signal.direction).length;
+      if (agreementCount > 1) {
+        score += (agreementCount - 1) * 3; // 3 points per additional agreement
+      }
+
+      // Risk-adjusted scoring: Prefer signals with better risk/reward
+      const riskReward = (signal.target - signal.entryPrice) / (signal.entryPrice - signal.stopLoss);
+      if (riskReward > 1.5) score += 2; // Bonus for good risk/reward
+
+      return { signal, strategyName, score };
+    });
+
+    // Sort by score (highest first)
+    scoredSignals.sort((a, b) => b.score - a.score);
+
+    const winner = scoredSignals[0];
+
+    logger.info(`🏆 Signal selection: ${winner.strategyName} wins with score ${winner.score.toFixed(1)} (${scoredSignals.length} candidates)`);
+    scoredSignals.forEach(({ strategyName, score, signal }, index) => {
+      const emoji = index === 0 ? '🥇' : index === 1 ? '🥈' : '🥉';
+      logger.info(`   ${emoji} ${strategyName}: ${score.toFixed(1)} (confidence: ${signal.confidence.toFixed(1)}%, direction: ${signal.direction})`);
+    });
+
+    return { signal: winner.signal, strategyName: winner.strategyName };
   }
 }
 
