@@ -1,5 +1,5 @@
 import winston from 'winston';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 
 // 🚀 P1 OPTIMIZATION: Structured logging with request IDs and contextual metadata
 export interface LogContext {
@@ -43,7 +43,7 @@ class RequestContext {
   }
 
   public createRequestId(): string {
-    return uuidv4().substring(0, 8); // Short UUID for readability
+    return randomUUID().substring(0, 8); // Short UUID for readability
   }
 }
 
